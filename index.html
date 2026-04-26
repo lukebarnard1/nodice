@@ -79,18 +79,46 @@ body {
 }
 
 /* ── Dice area ───────────────────────────────────────── */
+/*
+ * Two-layer pattern:
+ *   .dice-area  = scroll box — takes all remaining screen height via flex:1,
+ *                 never overflows its parent, scrolls internally.
+ *   .dice-inner = content wrapper — min-height:100% so it always fills the
+ *                 scroll box (centering dice when few) and grows beyond it
+ *                 when there are many dice (scroll kicks in automatically).
+ */
 .dice-area {
-  flex: 1 1 0%;
-  min-height: 0;
-  height: 0;
-  display: flex; flex-wrap: wrap; gap: 7px;
-  padding: 12px;
-  justify-content: center; align-content: center;
+  flex: 1;
+  min-height: 0;          /* allow flex child to shrink below content size */
   overflow-y: auto;
+  overflow-x: hidden;
   cursor: pointer;
-  position: relative;
+  -webkit-overflow-scrolling: touch;
 }
 .dice-area.is-rolling { cursor: wait; }
+
+.dice-inner {
+  min-height: 100%;       /* fills .dice-area when content is small */
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 12px;
+  justify-content: center;
+  align-content: center;
+  position: relative;
+}
+
+/* Pull-to-restart indicator */
+.ptr-bar {
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  color: #5a5a80;
+  padding: 6px 0 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s;
+}
 
 .die {
   width: 52px; height: 52px; border-radius: 11px;
@@ -118,8 +146,9 @@ body {
 }
 
 .roll-hint {
-  position: absolute; bottom: 8px; left: 0; right: 0;
+  width: 100%;
   text-align: center; font-size: 12px; color: #4a4a70;
+  padding: 6px 0;
   animation: breathe 2s infinite;
 }
 .overflow-note {
@@ -460,7 +489,7 @@ function newGame() {
 
 // ─── ACTIONS ───────────────────────────────────────────
 function animateRollingDice() {
-  const el = document.querySelector('.dice-area');
+  const el = document.querySelector('.dice-inner');
   if (!el) return;
   const n = G.diceTypes.length;
   const size = n > 50 ? 'xs' : n > 20 ? 'sm' : '';
@@ -668,11 +697,12 @@ function render() {
   }
   h += `</div>`;
 
-  // Dice area
+  // Dice area — outer = scroll container, inner = flex content (centers when few, scrolls when many)
   const canRoll = G.phase === 'idle' || G.phase === 'scored';
   h += `<div class="dice-area${G.phase === 'rolling' ? ' is-rolling' : ''}" onclick="onAreaClick()">`;
+  h += `<div id="ptr" class="ptr-bar"> </div>`;
+  h += `<div class="dice-inner">`;
   if (G.phase === 'rolling') {
-    // animateRollingDice() takes over immediately after render — show placeholders
     h += renderIdleDice();
     h += `<div class="roll-hint">Rolling...</div>`;
   } else if (G.phase === 'idle' && !G.lastRoll) {
@@ -685,7 +715,8 @@ function render() {
   } else if (r) {
     h += renderDiceGrid(r.dice, true);
   }
-  h += `</div>`;
+  h += `</div>`; // .dice-inner
+  h += `</div>`; // .dice-area
 
   // Score panel
   h += `<div class="score-panel">`;
@@ -768,6 +799,47 @@ function renderShop() {
   </div></div>`;
   return h;
 }
+
+// ─── PULL TO RESTART ──────────────────────────────────
+// Touch listeners on document survive innerHTML re-renders.
+// Activates only when .dice-area is scrolled to the top.
+(function () {
+  const THRESHOLD = 72;
+  let startY = 0, dist = 0, live = false;
+
+  function ptr() { return document.getElementById('ptr'); }
+
+  document.addEventListener('touchstart', e => {
+    const area = document.querySelector('.dice-area');
+    live = !!(area && area.scrollTop <= 0);
+    if (live) startY = e.touches[0].clientY;
+    dist = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!live) return;
+    const area = document.querySelector('.dice-area');
+    if (!area || area.scrollTop > 0) { live = false; return; }
+    dist = Math.max(0, e.touches[0].clientY - startY);
+    const el = ptr();
+    if (el) {
+      el.style.opacity = Math.min(1, dist / THRESHOLD);
+      el.textContent = dist >= THRESHOLD ? '↑ release to restart' : '↓ pull to restart';
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (!live) return;
+    live = false;
+    if (dist >= THRESHOLD) {
+      newGame();
+    } else {
+      const el = ptr();
+      if (el) el.style.opacity = 0;
+    }
+    dist = 0;
+  }, { passive: true });
+})();
 
 newGame();
 </script>
