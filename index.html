@@ -122,10 +122,7 @@ body {
   width: 100%; text-align: center;
   font-size: 11px; color: #5a5a80; padding: 4px 0;
 }
-.rolling-spinner {
-  font-size: 40px; animation: spin .5s linear infinite;
-}
-@keyframes spin    { to { transform: rotate(360deg); } }
+.die.is-rolling { animation: none; }
 @keyframes breathe { 0%,100%{opacity:.35} 50%{opacity:.9} }
 
 /* ── Score panel ─────────────────────────────────────── */
@@ -409,6 +406,7 @@ function genShop(rng) {
 
 // ─── GAME STATE ────────────────────────────────────────
 let G;
+let _animTimer = null;
 
 function newGame() {
   const seed = (Math.floor(Math.random() * 0xFFFFFF) + 1) >>> 0;
@@ -429,12 +427,32 @@ function newGame() {
 }
 
 // ─── ACTIONS ───────────────────────────────────────────
+function animateRollingDice() {
+  const el = document.querySelector('.dice-area');
+  if (!el) return;
+  const n = G.diceTypes.length;
+  const size = n > 50 ? 'xs' : n > 20 ? 'sm' : '';
+  let html = '';
+  for (const t of G.diceTypes) {
+    const faces = DICE[t].faces;
+    const val = faces[Math.floor(Math.random() * faces.length)];
+    const cls = ['die', `die-${t}`, 'is-rolling', size].filter(Boolean).join(' ');
+    html += `<div class="${cls}">${dieFace(t, val)}</div>`;
+  }
+  html += `<div class="roll-hint">Rolling...</div>`;
+  el.innerHTML = html;
+}
+
 function doRoll() {
   if (G.phase !== 'idle' && G.phase !== 'scored') return;
   if (G.handsLeft <= 0) return;
   G.phase = 'rolling';
   render();
+  animateRollingDice();
+  _animTimer = setInterval(animateRollingDice, 80);
   setTimeout(() => {
+    clearInterval(_animTimer);
+    _animTimer = null;
     const boss = isBoss(G.round) ? bossForRound(G.round).id : null;
     const roll = scoreRoll(G.diceTypes, G.gemIds, G.rng, boss);
     G.lastRoll = roll;
@@ -579,8 +597,11 @@ function render() {
   const canRoll = G.phase === 'idle' || G.phase === 'scored';
   h += `<div class="dice-area${G.phase === 'rolling' ? ' is-rolling' : ''}" onclick="onAreaClick()">`;
   if (G.phase === 'rolling') {
-    h += `<div class="rolling-spinner">🎲</div>`;
+    // animateRollingDice() takes over immediately after render — show placeholders
+    h += renderIdleDice();
+    h += `<div class="roll-hint">Rolling...</div>`;
   } else if (G.phase === 'idle' && !G.lastRoll) {
+    h += `<div style="width:100%;text-align:center;font-size:10px;color:#4a4a70;margin-bottom:6px;letter-spacing:1px">YOUR DICE (${G.diceTypes.length})</div>`;
     h += renderIdleDice();
     h += `<div class="roll-hint">tap to roll</div>`;
   } else if (canRoll && G.lastRoll) {
