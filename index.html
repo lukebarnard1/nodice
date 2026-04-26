@@ -497,6 +497,7 @@ function genShop(rng, wasBoss) {
 // ─── GAME STATE ────────────────────────────────────────
 let G;
 let _animTimer = null;
+let _revealTimer = null;
 
 function newGame() {
   const seed = (Math.floor(Math.random() * 0xFFFFFF) + 1) >>> 0;
@@ -549,16 +550,101 @@ function doRoll() {
     _animTimer = null;
     const boss = isBoss(G.round) ? bossForRound(G.round).id : null;
     const roll = scoreRoll(G.diceTypes, G.gemIds, G.rng, boss);
-    G.lastRoll = roll;
-    G.totalScore += roll.score;
-    G.handsLeft--;
-    if (roll.spawnedTypes.length > 0) G.diceTypes.push(...roll.spawnedTypes);
-    const thresh = effectiveThreshold(G.round);
-    if (G.totalScore >= thresh)  G.phase = 'roundWon';
-    else if (G.handsLeft === 0)  G.phase = 'gameover';
-    else                         G.phase = 'scored';
-    render();
+    startReveal(roll);
   }, 550);
+}
+
+function startReveal(roll) {
+  const dice = [...roll.dice];
+  const freqMap = new Map();
+  for (const d of dice) freqMap.set(d.value, (freqMap.get(d.value) || 0) + 1);
+  dice.sort((a, b) => {
+    const fa = freqMap.get(a.value), fb = freqMap.get(b.value);
+    if (fb !== fa) return fb - fa;
+    return b.value - a.value;
+  });
+
+  const n = dice.length;
+  const totalMs = Math.min(2000, Math.max(600, n * 60));
+  const ticks = Math.round(totalMs / 30);
+  const batchSize = Math.max(1, Math.ceil(n / ticks));
+
+  G.phase = 'revealing';
+  G.reveal = { dice, freqMap, revealedCount: 0, batchSize, roll };
+  render();
+  updateRevealFrame();
+
+  _revealTimer = setInterval(() => {
+    G.reveal.revealedCount = Math.min(n, G.reveal.revealedCount + batchSize);
+    updateRevealFrame();
+    if (G.reveal.revealedCount >= n) {
+      clearInterval(_revealTimer);
+      _revealTimer = null;
+      setTimeout(finishReveal, 300);
+    }
+  }, 30);
+}
+
+function updateRevealFrame() {
+  const rv = G.reveal;
+  const { dice, freqMap, revealedCount } = rv;
+  const n = dice.length;
+  const size = dieSize(n);
+
+  const inner = document.querySelector('.dice-inner');
+  if (!inner) return;
+
+  const cap = n > 1000 ? 2000 : 500;
+  const revealCap = Math.min(revealedCount, cap);
+  const rollingCap = Math.min(n - revealedCount, cap - revealCap);
+
+  let html = n > 50 ? typeSummaryHtml(dice) : '';
+  let dividerDone = false;
+
+  for (let i = 0; i < revealCap; i++) {
+    const d = dice[i];
+    const matched = (freqMap.get(d.value) || 0) >= 2;
+    if (!dividerDone && i > 0) {
+      const prevMatched = (freqMap.get(dice[i - 1].value) || 0) >= 2;
+      if (prevMatched && !matched) {
+        html += `<div style="width:100%;height:1px;background:#2a2a40;margin:3px 0"></div>`;
+        dividerDone = true;
+      }
+    }
+    html += dieEl(d, size, matched);
+  }
+
+  for (let i = 0; i < rollingCap; i++) {
+    const d = dice[revealedCount + i];
+    const fi = Math.floor(Math.random() * 6);
+    const cls = ['die', `die-${d.type}`, 'is-rolling', size].filter(Boolean).join(' ');
+    const badge = DICE[d.type].isMult ? '<span class="die-badge">×</span>' : '';
+    html += `<div class="${cls}">${NORMAL_FACES[fi]}${badge}</div>`;
+  }
+
+  if (n > cap) html += `<div class="overflow-note">… and ${(n - cap).toLocaleString()} more</div>`;
+  inner.innerHTML = html;
+
+  const scoreEl = document.querySelector('.score-reveal');
+  if (scoreEl) {
+    const displayScore = Math.round(rv.roll.score * revealedCount / n);
+    scoreEl.textContent = displayScore.toLocaleString();
+    scoreEl.style.fontSize = scoreSize(Math.max(1, displayScore));
+  }
+}
+
+function finishReveal() {
+  const roll = G.reveal.roll;
+  G.lastRoll = roll;
+  G.totalScore += roll.score;
+  G.handsLeft--;
+  if (roll.spawnedTypes.length > 0) G.diceTypes.push(...roll.spawnedTypes);
+  const thresh = effectiveThreshold(G.round);
+  if (G.totalScore >= thresh)  G.phase = 'roundWon';
+  else if (G.handsLeft === 0)  G.phase = 'gameover';
+  else                         G.phase = 'scored';
+  G.reveal = null;
+  render();
 }
 
 function enterShop() {
@@ -760,6 +846,8 @@ function render() {
   if (G.phase === 'rolling') {
     h += renderIdleDice();
     h += `<div class="roll-hint">Rolling...</div>`;
+  } else if (G.phase === 'revealing') {
+    h += `<div class="roll-hint">Scoring...</div>`;
   } else if (G.phase === 'idle' && !G.lastRoll) {
     h += `<div style="width:100%;text-align:center;font-size:10px;color:#4a4a70;margin-bottom:6px;letter-spacing:1px">YOUR DICE (${G.diceTypes.length})</div>`;
     h += renderIdleDice();
@@ -775,7 +863,10 @@ function render() {
 
   // Score panel
   h += `<div class="score-panel">`;
-  if (r) {
+  if (G.phase === 'revealing') {
+    h += `<div class="score-reveal score-main c-dim" style="font-size:32px">0</div>`;
+    h += `<div class="score-break">Scoring…</div>`;
+  } else if (r) {
     h += `<div class="score-main" style="font-size:${scoreSize(r.score)}">${r.score.toLocaleString()}</div>`;
     if (r.comboLines && r.comboLines.length > 0) {
       for (const line of r.comboLines) {
