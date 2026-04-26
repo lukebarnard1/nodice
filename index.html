@@ -132,6 +132,7 @@ body {
 .die.xs { width: 26px; height: 26px; font-size: 11px; border-radius: 6px; }
 .die.spawned { border-style: dashed; opacity: .82; }
 .die.matched { border-color: rgba(255,255,255,.55); box-shadow: 0 0 7px rgba(255,255,255,.18); }
+.die.cursed  { opacity: .3; border-color: #f87171; border-style: dashed; }
 
 .die-normal { background: #222238; color: #e4d8c0; }
 .die-blue   { background: #0e1e38; color: #60a5fa; }
@@ -378,16 +379,24 @@ function scoreRoll(diceTypes, gemIds, rng, bossEffect) {
     if (g && g.phase === 'modify') g.run(dice);
   }
 
-  // 5. Sum additive, product multiplicative
+  // 5. Boss: curse one random die (mark it, exclude from all scoring)
+  if (bossEffect === 'onedead' && dice.length > 0) {
+    dice[rng.int(dice.length)].cursed = true;
+  }
+
+  // 6. Sum additive, product multiplicative (skip cursed)
   let addSum = 0, multProd = 1;
   for (const d of dice) {
+    if (d.cursed) continue;
     if (DICE[d.type].isMult) multProd *= d.value;
     else addSum += d.value;
   }
 
-  // 6. Combination detection — multiple combos can stack
+  // 7. Combination detection — multiple combos can stack (skip cursed)
   const freq = new Map();
-  for (const d of dice) freq.set(d.value, (freq.get(d.value) || 0) + 1);
+  for (const d of dice) {
+    if (!d.cursed) freq.set(d.value, (freq.get(d.value) || 0) + 1);
+  }
 
   let handMult = 1;
   const comboLines = [];
@@ -407,10 +416,7 @@ function scoreRoll(diceTypes, gemIds, rng, bossEffect) {
 
   const combo = comboLines.length > 0 ? comboLines.join(' · ') : 'none';
 
-  // Boss: no combos
-  if (bossEffect === 'nocombo') { comboLines.length = 0; handMult = 1; }
-
-  // 7. Score gems
+  // 8. Score gems
   const info = { combo: comboLines.length > 0 ? combo : 'none', handMult };
   for (const id of gemIds) {
     const g = GEMS[id];
@@ -430,9 +436,9 @@ function getThreshold(round) {
 function isBoss(round) { return round % 3 === 0; }
 
 const BOSS_EFFECTS = [
-  { id: 'thresh', label: 'Score threshold ×1.5' },
-  { id: 'nocombo', label: 'No combinations count this round' },
-  { id: 'min2',   label: 'All dice minimum face value is 2' },
+  { id: 'thresh',  label: 'Score threshold ×1.5' },
+  { id: 'onedead', label: 'One die is cursed each roll — it scores nothing' },
+  { id: 'min2',    label: 'All dice minimum face value is 2' },
 ];
 function bossForRound(round) {
   return BOSS_EFFECTS[Math.floor(round / 3 - 1) % BOSS_EFFECTS.length];
@@ -570,8 +576,11 @@ function dieFace(type, value) {
 }
 
 function dieEl(d, size, matched = false) {
-  const cls = ['die', `die-${d.type}`, size, d.spawned ? 'spawned' : '', matched ? 'matched' : '']
-    .filter(Boolean).join(' ');
+  const cls = ['die', `die-${d.type}`, size,
+    d.spawned ? 'spawned' : '',
+    matched    ? 'matched'  : '',
+    d.cursed   ? 'cursed'   : '',
+  ].filter(Boolean).join(' ');
   return `<div class="${cls}">${dieFace(d.type, d.value)}</div>`;
 }
 
