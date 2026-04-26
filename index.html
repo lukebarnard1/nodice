@@ -80,8 +80,9 @@ body {
 
 /* ── Dice area ───────────────────────────────────────── */
 .dice-area {
-  flex: 1;
+  flex: 1 1 0%;
   min-height: 0;
+  height: 0;
   display: flex; flex-wrap: wrap; gap: 7px;
   padding: 12px;
   justify-content: center; align-content: flex-start;
@@ -109,6 +110,7 @@ body {
 .die-red    { background: #301010; color: #f87171; }
 .die-green  { background: #0e2810; color: #4ade80; }
 .die-purple { background: #1c0c2e; color: #c084fc; }
+.die-orange { background: #2a1200; color: #fb923c; }
 
 @keyframes revealDie {
   from { transform: scale(.4) rotate(-25deg); opacity: 0; }
@@ -245,11 +247,12 @@ const DICE = {
   red:    { name: 'Red',    faces: [2,4,6,8,10,12], isMult: false },
   green:  { name: 'Green',  faces: [1,1,1,3,3,3],   isMult: false },
   purple: { name: 'Purple', faces: [1,2,3,4,5,6],   isMult: true  },
+  orange: { name: 'Orange', faces: [0,0,0,0,6,6],   isMult: false },
 };
-// Weighted shop pool — purple is 3× rarer than the others
+// Weighted shop pool — purple is rare, orange is uncommon
 const BUYABLE_DICE_POOL = [
   { type: 'blue', w: 3 }, { type: 'red', w: 3 },
-  { type: 'green', w: 3 }, { type: 'purple', w: 1 },
+  { type: 'green', w: 3 }, { type: 'orange', w: 2 }, { type: 'purple', w: 1 },
 ];
 function pickShopDie(rng) {
   const total = BUYABLE_DICE_POOL.reduce((s, d) => s + d.w, 0);
@@ -270,27 +273,30 @@ function rollDie(type, rng, spawned = false) {
 const GEMS = {
   oneseed: {
     name: 'Oneseed',
-    desc: 'Each rolled 1 spawns a Normal die',
+    desc: 'Every 3 rolled 1s spawn a Normal die',
     cost: 5, phase: 'spawn',
-    run: (dice, rng) => dice
-      .filter(d => !d.spawned && d.value === 1)
-      .map(() => rollDie('normal', rng, true)),
+    run: (dice, rng) => {
+      const n = Math.floor(dice.filter(d => !d.spawned && d.value === 1).length / 3);
+      return Array.from({length: n}, () => rollDie('normal', rng, true));
+    },
   },
   verdant: {
     name: 'Verdant',
-    desc: 'Each Green 3 has a 1/3 chance to spawn a Green die',
+    desc: 'Every 2 Green 3s spawn a Green die',
     cost: 6, phase: 'spawn',
-    run: (dice, rng) => dice
-      .filter(d => !d.spawned && d.type === 'green' && d.value === 3 && rng.bool(1/3))
-      .map(() => rollDie('green', rng, true)),
+    run: (dice, rng) => {
+      const n = Math.floor(dice.filter(d => !d.spawned && d.type === 'green' && d.value === 3).length / 2);
+      return Array.from({length: n}, () => rollDie('green', rng, true));
+    },
   },
   multiseed: {
     name: 'Multiseed',
-    desc: 'Each non-purple 6 spawns a Purple die',
+    desc: 'Every 3 non-purple 6s spawn a Purple die',
     cost: 8, phase: 'spawn',
-    run: (dice, rng) => dice
-      .filter(d => !d.spawned && d.value === 6 && d.type !== 'purple')
-      .map(() => rollDie('purple', rng, true)),
+    run: (dice, rng) => {
+      const n = Math.floor(dice.filter(d => !d.spawned && d.value === 6 && d.type !== 'purple').length / 3);
+      return Array.from({length: n}, () => rollDie('purple', rng, true));
+    },
   },
   crimson: {
     name: 'Crimson',
@@ -350,29 +356,40 @@ function scoreRoll(diceTypes, gemIds, rng, bossEffect) {
     else addSum += d.value;
   }
 
-  // 6. Combination detection (frequency of face values)
+  // 6. Combination detection — multiple combos can stack
   const freq = new Map();
   for (const d of dice) freq.set(d.value, (freq.get(d.value) || 0) + 1);
-  const maxFreq = freq.size ? Math.max(...freq.values()) : 0;
 
-  let combo, handMult;
-  if      (maxFreq >= 4) { combo = 'FOUR OF A KIND'; handMult = 5; }
-  else if (maxFreq >= 3) { combo = 'THREE OF A KIND'; handMult = 3; }
-  else if (maxFreq >= 2) { combo = 'PAIR';            handMult = 2; }
-  else                   { combo = 'none';            handMult = 1; }
+  let handMult = 1;
+  const comboLines = [];
+  let hasPair = false;
+  const fiveKinds = [];
+
+  for (const [val, cnt] of freq) {
+    if      (cnt >= 5) { fiveKinds.push(val); comboLines.push(`Five ${val}s`); }
+    else if (cnt >= 4) { handMult += 5;       comboLines.push(`Four ${val}s (+5)`); }
+    else if (cnt >= 3) { handMult += val;     comboLines.push(`Three ${val}s (+${val})`); }
+    else if (cnt >= 2) { hasPair = true; }
+  }
+  // Five-of-a-kind multiplies after all additive bonuses (skip value 0)
+  for (const val of fiveKinds) { if (val > 0) handMult *= val; }
+  // Pair is a fallback when no other combo exists
+  if (comboLines.length === 0 && hasPair) { handMult = 2; comboLines.push('Pair (×2)'); }
+
+  const combo = comboLines.length > 0 ? comboLines.join(' · ') : 'none';
 
   // Boss: no combos
-  if (bossEffect === 'nocombo') { combo = 'none'; handMult = 1; }
+  if (bossEffect === 'nocombo') { comboLines.length = 0; handMult = 1; }
 
   // 7. Score gems
-  const info = { combo, handMult };
+  const info = { combo: comboLines.length > 0 ? combo : 'none', handMult };
   for (const id of gemIds) {
     const g = GEMS[id];
     if (g && g.phase === 'score') g.run(info);
   }
 
   const score = Math.floor(addSum * multProd * info.handMult);
-  return { dice, addSum, multProd, combo: info.combo, handMult: info.handMult, score, spawnedTypes };
+  return { dice, addSum, multProd, combo: info.combo, comboLines, handMult: info.handMult, score, spawnedTypes };
 }
 
 // ─── ROUND CONFIG ──────────────────────────────────────
@@ -674,8 +691,10 @@ function render() {
   h += `<div class="score-panel">`;
   if (r) {
     h += `<div class="score-main" style="font-size:${scoreSize(r.score)}">${r.score.toLocaleString()}</div>`;
-    if (r.combo !== 'none') {
-      h += `<div class="score-combo">${r.combo} ×${r.handMult}</div>`;
+    if (r.comboLines && r.comboLines.length > 0) {
+      for (const line of r.comboLines) {
+        h += `<div class="score-combo">${line}</div>`;
+      }
     }
     let bd = `${r.addSum}`;
     if (r.multProd > 1) bd += ` × ${r.multProd} (purple)`;
