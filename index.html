@@ -81,9 +81,10 @@ body {
 /* ── Dice area ───────────────────────────────────────── */
 .dice-area {
   flex: 1;
+  min-height: 0;
   display: flex; flex-wrap: wrap; gap: 7px;
   padding: 12px;
-  justify-content: center; align-content: center;
+  justify-content: center; align-content: flex-start;
   overflow-y: auto;
   cursor: pointer;
   position: relative;
@@ -101,6 +102,7 @@ body {
 .die.sm { width: 38px; height: 38px; font-size: 16px; border-radius: 8px; }
 .die.xs { width: 26px; height: 26px; font-size: 11px; border-radius: 6px; }
 .die.spawned { border-style: dashed; opacity: .82; }
+.die.matched { border-color: rgba(255,255,255,.55); box-shadow: 0 0 7px rgba(255,255,255,.18); }
 
 .die-normal { background: #222238; color: #e4d8c0; }
 .die-blue   { background: #0e1e38; color: #60a5fa; }
@@ -244,7 +246,17 @@ const DICE = {
   green:  { name: 'Green',  faces: [1,1,1,3,3,3],   isMult: false },
   purple: { name: 'Purple', faces: [1,2,3,4,5,6],   isMult: true  },
 };
-const BUYABLE_DICE = ['blue', 'red', 'green', 'purple'];
+// Weighted shop pool — purple is 3× rarer than the others
+const BUYABLE_DICE_POOL = [
+  { type: 'blue', w: 3 }, { type: 'red', w: 3 },
+  { type: 'green', w: 3 }, { type: 'purple', w: 1 },
+];
+function pickShopDie(rng) {
+  const total = BUYABLE_DICE_POOL.reduce((s, d) => s + d.w, 0);
+  let r = rng.next() * total;
+  for (const d of BUYABLE_DICE_POOL) { r -= d.w; if (r <= 0) return d.type; }
+  return BUYABLE_DICE_POOL[0].type;
+}
 
 function rollDie(type, rng, spawned = false) {
   const f = DICE[type].faces;
@@ -387,7 +399,7 @@ function effectiveThreshold(round) {
 
 // ─── SHOP GENERATION ──────────────────────────────────
 function genShop(rng) {
-  const dieType = rng.pick(BUYABLE_DICE);
+  const dieType = pickShopDie(rng);
   const gemKeys = rng.shuffle(Object.keys(GEMS));
   const items = [
     {
@@ -511,18 +523,60 @@ function dieFace(type, value) {
   return value;
 }
 
-function dieEl(d, size) {
-  const cls = ['die', `die-${d.type}`, size, d.spawned ? 'spawned' : '']
+function dieEl(d, size, matched = false) {
+  const cls = ['die', `die-${d.type}`, size, d.spawned ? 'spawned' : '', matched ? 'matched' : '']
     .filter(Boolean).join(' ');
   return `<div class="${cls}">${dieFace(d.type, d.value)}</div>`;
 }
 
-function renderDiceGrid(dice) {
-  const n = dice.length;
+// Returns a font-size string that keeps the score on screen
+function scoreSize(n) {
+  const len = n.toLocaleString().length;
+  if (len > 12) return '14px';
+  if (len > 9)  return '18px';
+  if (len > 6)  return '24px';
+  return '32px';
+}
+
+function hudNumSize(n) {
+  const len = n.toLocaleString().length;
+  return len > 7 ? '12px' : len > 5 ? '15px' : '19px';
+}
+
+// Render dice grid; when grouped=true, sort combo dice to the front with a divider
+function renderDiceGrid(dice, grouped = false) {
+  const displayDice = [...dice];
+  const freqMap = new Map();
+
+  if (grouped) {
+    for (const d of dice) freqMap.set(d.value, (freqMap.get(d.value) || 0) + 1);
+    displayDice.sort((a, b) => {
+      const fa = freqMap.get(a.value), fb = freqMap.get(b.value);
+      if (fb !== fa) return fb - fa;
+      return b.value - a.value;
+    });
+  }
+
+  const n = displayDice.length;
   const size = n > 50 ? 'xs' : n > 20 ? 'sm' : '';
   const limit = 150;
   let html = '';
-  for (let i = 0; i < Math.min(n, limit); i++) html += dieEl(dice[i], size);
+  let dividerDone = false;
+
+  for (let i = 0; i < Math.min(n, limit); i++) {
+    const d = displayDice[i];
+    const matched = grouped && (freqMap.get(d.value) || 0) >= 2;
+
+    if (grouped && !dividerDone && i > 0) {
+      const prevMatched = (freqMap.get(displayDice[i - 1].value) || 0) >= 2;
+      if (prevMatched && !matched) {
+        html += `<div style="width:100%;height:1px;background:#2a2a40;margin:3px 0"></div>`;
+        dividerDone = true;
+      }
+    }
+
+    html += dieEl(d, size, matched);
+  }
   if (n > limit) html += `<div class="overflow-note">+${n - limit} more dice</div>`;
   return html;
 }
@@ -554,11 +608,11 @@ function render() {
     </div>
     <div class="hud-cell">
       <div class="hud-label">Score</div>
-      <div class="hud-val c-yellow">${G.totalScore.toLocaleString()}</div>
+      <div class="hud-val c-yellow" style="font-size:${hudNumSize(G.totalScore)}">${G.totalScore.toLocaleString()}</div>
     </div>
     <div class="hud-cell">
       <div class="hud-label">Need</div>
-      <div class="hud-val c-dim">${thresh.toLocaleString()}</div>
+      <div class="hud-val c-dim" style="font-size:${hudNumSize(thresh)}">${thresh.toLocaleString()}</div>
     </div>
     <div class="hud-cell">
       <div class="hud-label">Hands</div>
@@ -609,17 +663,17 @@ function render() {
     h += renderIdleDice();
     h += `<div class="roll-hint">tap to roll</div>`;
   } else if (canRoll && G.lastRoll) {
-    h += renderDiceGrid(G.lastRoll.dice);
+    h += renderDiceGrid(G.lastRoll.dice, true);
     h += `<div class="roll-hint">tap to roll again</div>`;
   } else if (r) {
-    h += renderDiceGrid(r.dice);
+    h += renderDiceGrid(r.dice, true);
   }
   h += `</div>`;
 
   // Score panel
   h += `<div class="score-panel">`;
   if (r) {
-    h += `<div class="score-main">${r.score.toLocaleString()}</div>`;
+    h += `<div class="score-main" style="font-size:${scoreSize(r.score)}">${r.score.toLocaleString()}</div>`;
     if (r.combo !== 'none') {
       h += `<div class="score-combo">${r.combo} ×${r.handMult}</div>`;
     }
