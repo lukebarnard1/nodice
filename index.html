@@ -123,16 +123,32 @@ body {
 .die {
   width: 52px; height: 52px; border-radius: 11px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 22px; font-weight: bold;
+  font-size: 22px; font-weight: normal;
   border: 2px solid rgba(255,255,255,.12);
   animation: revealDie .25s ease-out both;
   user-select: none; flex-shrink: 0;
+  position: relative;
 }
 .die.sm { width: 38px; height: 38px; font-size: 16px; border-radius: 8px; }
 .die.xs { width: 26px; height: 26px; font-size: 11px; border-radius: 6px; }
+.die.mini { width: 14px; height: 14px; border-radius: 4px; font-size: 0; border-width: 1px; }
+.die.nano { width:  9px; height:  9px; border-radius: 2px; font-size: 0; border-width: 1px; }
 .die.spawned { border-style: dashed; opacity: .82; }
 .die.matched { border-color: rgba(255,255,255,.55); box-shadow: 0 0 7px rgba(255,255,255,.18); }
 .die.cursed  { opacity: .3; border-color: #f87171; border-style: dashed; }
+/* Small badge for purple × indicator */
+.die-badge {
+  position: absolute; bottom: 2px; right: 3px;
+  font-size: 8px; line-height: 1; font-weight: normal;
+  opacity: .85; pointer-events: none;
+}
+.die.sm .die-badge { font-size: 7px; bottom: 1px; right: 2px; }
+.die.xs .die-badge, .die.mini .die-badge, .die.nano .die-badge { display: none; }
+/* Type count summary shown for large collections */
+.dice-type-summary {
+  width: 100%; text-align: center;
+  font-size: 11px; color: #5a5a80; padding: 2px 0 6px;
+}
 
 .die-normal { background: #222238; color: #e4d8c0; }
 .die-blue   { background: #0e1e38; color: #60a5fa; }
@@ -202,6 +218,12 @@ body {
 }
 .shop-title { font-size: 21px; color: #f5c542; font-weight: bold; text-align: center; }
 .shop-money { font-size: 13px; color: #4ade80; text-align: center; margin: 3px 0 14px; }
+.shop-section-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: #5a5a80; padding: 2px 2px 6px; margin-top: 8px;
+}
+.shop-section-label:first-of-type { margin-top: 0; }
+.shop-section-label.gem-label { color: #c084fc; }
 .shop-grid  { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .shop-card  {
   background: #1e1e35; border: 1px solid #3a3a60;
@@ -293,7 +315,8 @@ function pickShopDie(rng) {
 
 function rollDie(type, rng, spawned = false) {
   const f = DICE[type].faces;
-  return { type, value: f[rng.int(f.length)], spawned };
+  const fi = rng.int(f.length);
+  return { type, value: f[fi], faceIdx: fi, spawned };
 }
 
 // ─── GEM DEFINITIONS ──────────────────────────────────
@@ -450,25 +473,25 @@ function effectiveThreshold(round) {
 }
 
 // ─── SHOP GENERATION ──────────────────────────────────
-function genShop(rng) {
+function genShop(rng, wasBoss) {
   const dieType = pickShopDie(rng);
-  const gemKeys = rng.shuffle(Object.keys(GEMS));
-  const items = [
-    {
-      kind: 'die', id: dieType,
-      name: DICE[dieType].name + ' Die',
-      desc: 'Faces: ' + [...new Set(DICE[dieType].faces)].join(', ') +
-            (DICE[dieType].isMult ? ' (multiplier)' : ''),
-      cost: 4,
-    },
-    ...gemKeys.slice(0, 3).map(id => ({
-      kind: 'gem', id,
-      name: GEMS[id].name,
-      desc: GEMS[id].desc,
-      cost: GEMS[id].cost,
-    })),
-  ];
-  return rng.shuffle(items);
+  const items = [{
+    kind: 'die', section: 'dice', id: dieType,
+    name: DICE[dieType].name + ' Die',
+    desc: 'Faces: ' + [...new Set(DICE[dieType].faces)].join(', ') +
+          (DICE[dieType].isMult ? ' (multiplier)' : ''),
+    cost: 4,
+  }];
+  if (wasBoss) {
+    const gemId = rng.pick(Object.keys(GEMS));
+    items.push({
+      kind: 'gem', section: 'gems', id: gemId,
+      name: GEMS[gemId].name,
+      desc: GEMS[gemId].desc,
+      cost: GEMS[gemId].cost,
+    });
+  }
+  return items;
 }
 
 // ─── GAME STATE ────────────────────────────────────────
@@ -497,15 +520,19 @@ function newGame() {
 function animateRollingDice() {
   const el = document.querySelector('.dice-inner');
   if (!el) return;
-  const n = G.diceTypes.length;
-  const size = n > 50 ? 'xs' : n > 20 ? 'sm' : '';
-  let html = '';
-  for (const t of G.diceTypes) {
-    const faces = DICE[t].faces;
-    const val = faces[Math.floor(Math.random() * faces.length)];
+  const all = G.diceTypes;
+  const n = all.length;
+  const size = dieSize(n);
+  const cap = Math.min(n, 300);
+  let html = n > 50 ? typeSummaryHtml(all) : '';
+  for (let i = 0; i < cap; i++) {
+    const t = all[i];
+    const fi = Math.floor(Math.random() * 6);
     const cls = ['die', `die-${t}`, 'is-rolling', size].filter(Boolean).join(' ');
-    html += `<div class="${cls}">${dieFace(t, val)}</div>`;
+    const badge = DICE[t].isMult ? '<span class="die-badge">×</span>' : '';
+    html += `<div class="${cls}">${NORMAL_FACES[fi]}${badge}</div>`;
   }
+  if (n > cap) html += `<div class="overflow-note">… and ${(n - cap).toLocaleString()} more rolling</div>`;
   html += `<div class="roll-hint">Rolling...</div>`;
   el.innerHTML = html;
 }
@@ -535,9 +562,10 @@ function doRoll() {
 }
 
 function enterShop() {
+  const wasBoss = isBoss(G.round);
   G.money += G.handsLeft;
-  if (isBoss(G.round)) G.money += 3;
-  G.shopItems = genShop(G.rng);
+  if (wasBoss) G.money += 3;
+  G.shopItems = genShop(G.rng, wasBoss);
   G.phase = 'shop';
   render();
 }
@@ -569,22 +597,18 @@ function onAreaClick() {
 // ─── RENDERING ─────────────────────────────────────────
 const NORMAL_FACES = ['⚀','⚁','⚂','⚃','⚄','⚅'];
 
-function dieFace(type, value) {
-  if (type === 'normal' && value >= 1 && value <= 6) return NORMAL_FACES[value - 1];
-  if (DICE[type].isMult) return `×${value}`;
-  return value;
-}
-
+// All dice show ⚀–⚅ based on face index; only purple gets a × badge.
 function dieEl(d, size, matched = false) {
   const cls = ['die', `die-${d.type}`, size,
     d.spawned ? 'spawned' : '',
-    matched    ? 'matched'  : '',
-    d.cursed   ? 'cursed'   : '',
+    matched   ? 'matched' : '',
+    d.cursed  ? 'cursed'  : '',
   ].filter(Boolean).join(' ');
-  return `<div class="${cls}">${dieFace(d.type, d.value)}</div>`;
+  const sym   = NORMAL_FACES[(d.faceIdx ?? 0) % 6];
+  const badge = DICE[d.type].isMult ? '<span class="die-badge">×</span>' : '';
+  return `<div class="${cls}">${sym}${badge}</div>`;
 }
 
-// Returns a font-size string that keeps the score on screen
 function scoreSize(n) {
   const len = n.toLocaleString().length;
   if (len > 12) return '14px';
@@ -596,6 +620,26 @@ function scoreSize(n) {
 function hudNumSize(n) {
   const len = n.toLocaleString().length;
   return len > 7 ? '12px' : len > 5 ? '15px' : '19px';
+}
+
+// Pick die size class based on total count
+function dieSize(n) {
+  if (n > 1000) return 'nano';
+  if (n >  200) return 'mini';
+  if (n >   50) return 'xs';
+  if (n >   20) return 'sm';
+  return '';
+}
+
+// Type count summary string for large collections
+function typeSummaryHtml(source) {
+  const counts = {};
+  for (const item of source) {
+    const t = typeof item === 'string' ? item : item.type;
+    counts[t] = (counts[t] || 0) + 1;
+  }
+  const txt = Object.entries(counts).map(([t, c]) => `${c}× ${DICE[t].name}`).join('  ');
+  return `<div class="dice-type-summary">${txt}</div>`;
 }
 
 // Render dice grid; when grouped=true, sort combo dice to the front with a divider
@@ -613,9 +657,9 @@ function renderDiceGrid(dice, grouped = false) {
   }
 
   const n = displayDice.length;
-  const size = n > 50 ? 'xs' : n > 20 ? 'sm' : '';
-  const limit = 150;
-  let html = '';
+  const size = dieSize(n);
+  const limit = n > 1000 ? 2000 : 500;
+  let html = n > 50 ? typeSummaryHtml(displayDice) : '';
   let dividerDone = false;
 
   for (let i = 0; i < Math.min(n, limit); i++) {
@@ -629,19 +673,21 @@ function renderDiceGrid(dice, grouped = false) {
         dividerDone = true;
       }
     }
-
     html += dieEl(d, size, matched);
   }
-  if (n > limit) html += `<div class="overflow-note">+${n - limit} more dice</div>`;
+  if (n > limit) html += `<div class="overflow-note">… and ${(n - limit).toLocaleString()} more</div>`;
   return html;
 }
 
 function renderIdleDice() {
-  return G.diceTypes.map(t => {
-    const mid = Math.floor(DICE[t].faces.length / 2);
-    return dieEl({ type: t, value: DICE[t].faces[mid], spawned: false },
-                 G.diceTypes.length > 20 ? 'sm' : '');
+  const n = G.diceTypes.length;
+  const size = dieSize(n);
+  let html = n > 50 ? typeSummaryHtml(G.diceTypes) : '';
+  html += G.diceTypes.map(t => {
+    const fi = Math.floor(DICE[t].faces.length / 2);
+    return dieEl({ type: t, value: DICE[t].faces[fi], faceIdx: fi, spawned: false }, size);
   }).join('');
+  return html;
 }
 
 function render() {
@@ -780,27 +826,37 @@ function render() {
   document.getElementById('app').innerHTML = h;
 }
 
+function renderShopCard(it, idx) {
+  const ok = !it.bought && G.money >= it.cost;
+  return `<div class="shop-card${it.bought ? ' sold' : ''}">
+    <div>
+      <div class="shop-iname">${it.name}</div>
+      <div class="shop-idesc">${it.desc}</div>
+    </div>
+    <div class="shop-right">
+      <span class="shop-price">$${it.cost}</span>
+      <button class="btn-buy" onclick="buyItem(${idx})" ${ok ? '' : 'disabled'}>
+        ${it.bought ? 'Sold' : 'Buy'}
+      </button>
+    </div>
+  </div>`;
+}
+
 function renderShop() {
+  const diceItems = G.shopItems.filter(i => i.section === 'dice');
+  const gemItems  = G.shopItems.filter(i => i.section === 'gems');
+
   let h = `<div class="shop-overlay"><div class="shop-sheet">
     <div class="shop-title">Shop</div>
     <div class="shop-money">$${G.money} to spend</div>
-    <div class="shop-grid">`;
+    <div class="shop-grid">
+      <div class="shop-section-label">Dice</div>`;
 
-  for (let i = 0; i < G.shopItems.length; i++) {
-    const it = G.shopItems[i];
-    const ok = !it.bought && G.money >= it.cost;
-    h += `<div class="shop-card${it.bought ? ' sold' : ''}">
-      <div>
-        <div class="shop-iname">${it.name}</div>
-        <div class="shop-idesc">${it.desc}</div>
-      </div>
-      <div class="shop-right">
-        <span class="shop-price">$${it.cost}</span>
-        <button class="btn-buy" onclick="buyItem(${i})" ${ok ? '' : 'disabled'}>
-          ${it.bought ? 'Sold' : 'Buy'}
-        </button>
-      </div>
-    </div>`;
+  for (const it of diceItems) h += renderShopCard(it, G.shopItems.indexOf(it));
+
+  if (gemItems.length > 0) {
+    h += `<div class="shop-section-label gem-label">Gems — Boss Reward</div>`;
+    for (const it of gemItems) h += renderShopCard(it, G.shopItems.indexOf(it));
   }
 
   h += `</div>
