@@ -314,11 +314,14 @@ function scoreRoll(diceTypes, gemIds, rng, bossEffect) {
     dice.forEach(d => { if (d.value < 2) d.value = 2; });
   }
 
-  // 3. Spawn gems (spawned dice don't trigger further spawns)
+  // 3. Spawn gems (spawned dice don't trigger further spawns within this roll)
+  const spawnedTypes = [];
   for (const id of gemIds) {
     const g = GEMS[id];
     if (g && g.phase === 'spawn') {
-      dice = dice.concat(g.run(dice, rng));
+      const newDice = g.run(dice, rng);
+      dice = dice.concat(newDice);
+      spawnedTypes.push(...newDice.map(d => d.type));
     }
   }
 
@@ -357,7 +360,7 @@ function scoreRoll(diceTypes, gemIds, rng, bossEffect) {
   }
 
   const score = Math.floor(addSum * multProd * info.handMult);
-  return { dice, addSum, multProd, combo: info.combo, handMult: info.handMult, score };
+  return { dice, addSum, multProd, combo: info.combo, handMult: info.handMult, score, spawnedTypes };
 }
 
 // ─── ROUND CONFIG ──────────────────────────────────────
@@ -458,6 +461,7 @@ function doRoll() {
     G.lastRoll = roll;
     G.totalScore += roll.score;
     G.handsLeft--;
+    if (roll.spawnedTypes.length > 0) G.diceTypes.push(...roll.spawnedTypes);
     const thresh = effectiveThreshold(G.round);
     if (G.totalScore >= thresh)  G.phase = 'roundWon';
     else if (G.handsLeft === 0)  G.phase = 'gameover';
@@ -623,6 +627,11 @@ function render() {
     if (r.multProd > 1) bd += ` × ${r.multProd} (purple)`;
     if (r.handMult > 1) bd += ` × ${r.handMult} (combo)`;
     h += `<div class="score-break">${bd} = ${r.score.toLocaleString()}</div>`;
+    if (r.spawnedTypes.length > 0) {
+      const grouped = r.spawnedTypes.reduce((m, t) => (m[t] = (m[t]||0)+1, m), {});
+      const label = Object.entries(grouped).map(([t,n]) => `+${n} ${DICE[t].name}`).join(', ');
+      h += `<div class="score-break" style="color:#4ade80">${label} added to collection</div>`;
+    }
   } else {
     h += `<div class="score-main c-dim">—</div>`;
     h += `<div class="score-break">need ${thresh.toLocaleString()} over ${G.handsLeft} hands</div>`;
