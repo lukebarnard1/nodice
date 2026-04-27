@@ -162,9 +162,9 @@ body {
   to   { opacity: 1; transform: scale(1); }
 }
 @keyframes faceDrop {
-  0%   { transform: translateY(-300%); }
-  65%  { transform: translateY(10%); }
-  82%  { transform: translateY(-5%); }
+  0%   { transform: translateY(-3em); }
+  65%  { transform: translateY(0.2em); }
+  82%  { transform: translateY(-0.1em); }
   100% { transform: translateY(0); }
 }
 
@@ -178,11 +178,11 @@ body {
   width: 100%; text-align: center;
   font-size: 11px; color: #5a5a80; padding: 4px 0;
 }
-.die-sym { display: inline-block; animation: faceDrop .4s ease-out both; }
+.die-sym { display: inline-block; }
+.die.die-landing .die-sym { animation: faceDrop 130ms ease-out both; }
 .die.is-rolling { animation: none; }
 .die.is-rolling .die-sym { animation: none; }
 .die.no-anim { animation: none; }
-.die.no-anim .die-sym { animation: none; }
 @keyframes breathe { 0%,100%{opacity:.35} 50%{opacity:.9} }
 
 /* ── Score panel ─────────────────────────────────────── */
@@ -577,9 +577,10 @@ function startReveal(roll) {
   });
 
   const n = dice.length;
-  const totalMs = Math.min(2000, Math.max(600, n * 60));
-  const ticks = Math.round(totalMs / 30);
-  const batchSize = Math.max(1, Math.ceil(n / ticks));
+  const STEP_MS = 160;
+  const totalMs = Math.min(2000, Math.max(500, n * 60));
+  const steps = Math.max(1, Math.round(totalMs / STEP_MS));
+  const batchSize = Math.max(1, Math.ceil(n / steps));
 
   G.phase = 'revealing';
   G.reveal = { dice, freqMap, revealedCount: 0, prevRevealedCount: 0, batchSize, roll };
@@ -594,7 +595,7 @@ function startReveal(roll) {
       _revealTimer = null;
       setTimeout(finishReveal, 300);
     }
-  }, 30);
+  }, STEP_MS);
 }
 
 function updateRevealFrame() {
@@ -625,7 +626,8 @@ function updateRevealFrame() {
         dividerDone = true;
       }
     }
-    html += dieEl(d, size, matched, i < prevRevealedCount);
+    const alreadyRevealed = i < prevRevealedCount;
+    html += dieEl(d, size, matched, alreadyRevealed, !alreadyRevealed);
   }
 
   for (let i = 0; i < rollingCap; i++) {
@@ -701,12 +703,13 @@ function onAreaClick() {
 const NORMAL_FACES = ['⚀','⚁','⚂','⚃','⚄','⚅'];
 
 // All dice show ⚀–⚅ based on face index; only purple gets a × badge.
-function dieEl(d, size, matched = false, noAnim = false) {
+function dieEl(d, size, matched = false, noAnim = false, landing = false) {
   const cls = ['die', `die-${d.type}`, size,
-    d.spawned ? 'spawned' : '',
-    matched   ? 'matched' : '',
-    d.cursed  ? 'cursed'  : '',
+    d.spawned ? 'spawned'      : '',
+    matched   ? 'matched'      : '',
+    d.cursed  ? 'cursed'       : '',
     (noAnim || G.suppressDieAnim) ? 'no-anim' : '',
+    landing   ? 'die-landing'  : '',
   ].filter(Boolean).join(' ');
   const sym   = NORMAL_FACES[(d.faceIdx ?? 0) % 6];
   const badge = DICE[d.type].isMult ? '<span class="die-badge">×</span>' : '';
