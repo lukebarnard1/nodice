@@ -144,6 +144,22 @@ body {
 }
 .die.sm .die-badge { font-size: 7px; bottom: 1px; right: 2px; }
 .die.xs .die-badge, .die.mini .die-badge, .die.nano .die-badge { display: none; }
+/* Numeric value label shown on revealed/scored dice */
+.die-val {
+  position: absolute; bottom: 2px; left: 3px;
+  font-size: 8px; line-height: 1; opacity: 0.8;
+  pointer-events: none; font-weight: bold;
+}
+.die.sm .die-val { font-size: 7px; bottom: 1px; left: 2px; }
+.die.xs .die-val, .die.mini .die-val, .die.nano .die-val { display: none; }
+/* Inline combo label that animates in alongside dice */
+.combo-reveal-label {
+  width: 100%; text-align: center;
+  font-size: 12px; color: #c084fc;
+  padding: 2px 0 4px;
+  animation: dieIn .3s ease-out both;
+  letter-spacing: 0.3px;
+}
 /* Type count summary shown for large collections */
 .dice-type-summary {
   width: 100%; text-align: center;
@@ -508,6 +524,7 @@ function genShop(rng, wasBoss) {
 let G;
 let _animTimer = null;
 let _revealTimer = null;
+let _faceTimer = null;
 
 function newGame() {
   const seed = (Math.floor(Math.random() * 0xFFFFFF) + 1) >>> 0;
@@ -577,46 +594,48 @@ function startReveal(roll) {
   });
 
   const n = dice.length;
-  const STEP_MS = 160;
-  const totalMs = Math.min(2000, Math.max(500, n * 60));
+  const STEP_MS = 120;
+  const totalMs = Math.min(2500, Math.max(600, n * 80));
   const steps = Math.max(1, Math.round(totalMs / STEP_MS));
   const batchSize = Math.max(1, Math.ceil(n / steps));
 
+  // Track the last sorted index for each value that appears 2+ times (for combo labels).
+  const valueLastIdx = new Map();
+  for (let i = 0; i < dice.length; i++) {
+    if ((freqMap.get(dice[i].value) || 0) >= 2) valueLastIdx.set(dice[i].value, i);
+  }
+
   G.phase = 'revealing';
-  G.reveal = { dice, freqMap, revealedCount: 0, prevRevealedCount: 0, batchSize, roll };
+  G.reveal = { dice, freqMap, revealedCount: 0, prevRevealedCount: 0, batchSize, roll, valueLastIdx };
   render();
-  updateRevealFrame();
+  buildRevealDom();
+  updateRevealScore(0, n, roll.score);
 
   _revealTimer = setInterval(() => {
     G.reveal.revealedCount = Math.min(n, G.reveal.revealedCount + batchSize);
-    updateRevealFrame();
+    revealNextBatch();
+    updateRevealScore(G.reveal.revealedCount, n, roll.score);
     if (G.reveal.revealedCount >= n) {
-      clearInterval(_revealTimer);
-      _revealTimer = null;
+      clearInterval(_revealTimer); _revealTimer = null;
+      if (_faceTimer) { clearInterval(_faceTimer); _faceTimer = null; }
       setTimeout(finishReveal, 300);
     }
   }, STEP_MS);
 }
 
-function updateRevealFrame() {
+// Pre-populate .dice-inner with rolling placeholder dice; start face-spin interval.
+function buildRevealDom() {
   const rv = G.reveal;
-  const { dice, freqMap, revealedCount } = rv;
+  const { dice, freqMap } = rv;
   const n = dice.length;
   const size = dieSize(n);
-
+  const cap = Math.min(n, n > 1000 ? 2000 : 500);
   const inner = document.querySelector('.dice-inner');
   if (!inner) return;
 
-  const cap = n > 1000 ? 2000 : 500;
-  const revealCap = Math.min(revealedCount, cap);
-  const rollingCap = Math.min(n - revealedCount, cap - revealCap);
-
   let html = n > 50 ? typeSummaryHtml(dice) : '';
   let dividerDone = false;
-
-  const { prevRevealedCount } = rv;
-
-  for (let i = 0; i < revealCap; i++) {
+  for (let i = 0; i < cap; i++) {
     const d = dice[i];
     const matched = (freqMap.get(d.value) || 0) >= 2;
     if (!dividerDone && i > 0) {
@@ -626,31 +645,85 @@ function updateRevealFrame() {
         dividerDone = true;
       }
     }
-    const alreadyRevealed = i < prevRevealedCount;
-    html += dieEl(d, size, matched, alreadyRevealed, !alreadyRevealed);
-  }
-
-  for (let i = 0; i < rollingCap; i++) {
-    const d = dice[revealedCount + i];
     const fi = Math.floor(Math.random() * 6);
     const cls = ['die', `die-${d.type}`, 'is-rolling', size].filter(Boolean).join(' ');
     const badge = DICE[d.type].isMult ? '<span class="die-badge">×</span>' : '';
-    html += `<div class="${cls}"><span class="die-sym">${NORMAL_FACES[fi]}</span>${badge}</div>`;
+    html += `<div class="${cls}" data-ri="${i}"><span class="die-sym">${NORMAL_FACES[fi]}</span>${badge}</div>`;
   }
-
   if (n > cap) html += `<div class="overflow-note">… and ${(n - cap).toLocaleString()} more</div>`;
   inner.innerHTML = html;
-  rv.prevRevealedCount = revealedCount;
 
-  const scoreEl = document.querySelector('.score-reveal');
-  if (scoreEl) {
-    const displayScore = Math.round(rv.roll.score * revealedCount / n);
-    scoreEl.textContent = displayScore.toLocaleString();
-    scoreEl.style.fontSize = scoreSize(Math.max(1, displayScore));
+  if (_faceTimer) clearInterval(_faceTimer);
+  _faceTimer = setInterval(() => {
+    document.querySelectorAll('.dice-inner .die.is-rolling .die-sym')
+      .forEach(s => { s.textContent = NORMAL_FACES[Math.floor(Math.random() * 6)]; });
+  }, 100);
+}
+
+// Replace rolling placeholders with individually-animated revealed dice.
+function revealNextBatch() {
+  const rv = G.reveal;
+  const { dice, freqMap, revealedCount, prevRevealedCount, valueLastIdx, roll } = rv;
+  const n = dice.length;
+  const size = dieSize(n);
+  const cap = Math.min(n, n > 1000 ? 2000 : 500);
+  const inner = document.querySelector('.dice-inner');
+  if (!inner) return;
+
+  for (let i = prevRevealedCount; i < Math.min(revealedCount, cap); i++) {
+    const placeholder = inner.querySelector(`[data-ri="${i}"]`);
+    if (!placeholder) continue;
+    const d = dice[i];
+    const matched = (freqMap.get(d.value) || 0) >= 2;
+
+    const tmp = document.createElement('div');
+    tmp.innerHTML = dieEl(d, size, matched, false, true, true);
+    const dieNode = tmp.firstElementChild;
+
+    // Stagger each die within a batch so they pop in sequentially.
+    const delay = (i - prevRevealedCount) * 30;
+    if (delay > 0) {
+      dieNode.style.animationDelay = `${delay}ms`;
+      const sym = dieNode.querySelector('.die-sym');
+      if (sym) sym.style.animationDelay = `${delay}ms`;
+    }
+
+    placeholder.parentNode.replaceChild(dieNode, placeholder);
+
+    // When the last die of a combo group lands, show the combo label.
+    if (valueLastIdx.get(d.value) === i) {
+      const text = getValueComboText(d.value, freqMap.get(d.value), roll);
+      if (text) {
+        const label = document.createElement('div');
+        label.className = 'combo-reveal-label';
+        label.textContent = text;
+        label.style.animationDelay = `${delay + 80}ms`;
+        dieNode.insertAdjacentElement('afterend', label);
+      }
+    }
   }
+
+  rv.prevRevealedCount = revealedCount;
+}
+
+function getValueComboText(val, cnt, roll) {
+  if (cnt >= 5) return `Five ${val}s${val > 0 ? ` (×${val})` : ''}`;
+  if (cnt >= 4) return `Four ${val}s  (+5)`;
+  if (cnt >= 3) return `Three ${val}s  (+${val})`;
+  if (cnt >= 2 && roll.comboLines.length === 1 && roll.comboLines[0] === 'Pair (×2)') return 'Pair (×2)';
+  return null;
+}
+
+function updateRevealScore(revealedCount, n, totalScore) {
+  const el = document.querySelector('.score-reveal');
+  if (!el) return;
+  const v = revealedCount >= n ? totalScore : Math.round(totalScore * revealedCount / n);
+  el.textContent = v.toLocaleString();
+  el.style.fontSize = scoreSize(Math.max(1, v));
 }
 
 function finishReveal() {
+  if (_faceTimer) { clearInterval(_faceTimer); _faceTimer = null; }
   const roll = G.reveal.roll;
   G.lastRoll = roll;
   G.totalScore += roll.score;
@@ -703,7 +776,8 @@ function onAreaClick() {
 const NORMAL_FACES = ['⚀','⚁','⚂','⚃','⚄','⚅'];
 
 // All dice show ⚀–⚅ based on face index; only purple gets a × badge.
-function dieEl(d, size, matched = false, noAnim = false, landing = false) {
+// showVal: also render the numeric rolled value (bottom-left).
+function dieEl(d, size, matched = false, noAnim = false, landing = false, showVal = false) {
   const cls = ['die', `die-${d.type}`, size,
     d.spawned ? 'spawned'      : '',
     matched   ? 'matched'      : '',
@@ -713,7 +787,8 @@ function dieEl(d, size, matched = false, noAnim = false, landing = false) {
   ].filter(Boolean).join(' ');
   const sym   = NORMAL_FACES[(d.faceIdx ?? 0) % 6];
   const badge = DICE[d.type].isMult ? '<span class="die-badge">×</span>' : '';
-  return `<div class="${cls}"><span class="die-sym">${sym}</span>${badge}</div>`;
+  const val   = showVal && d.value !== undefined ? `<span class="die-val">${d.value}</span>` : '';
+  return `<div class="${cls}"><span class="die-sym">${sym}</span>${badge}${val}</div>`;
 }
 
 function scoreSize(n) {
@@ -749,8 +824,9 @@ function typeSummaryHtml(source) {
   return `<div class="dice-type-summary">${txt}</div>`;
 }
 
-// Render dice grid; when grouped=true, sort combo dice to the front with a divider
-function renderDiceGrid(dice, grouped = false) {
+// Render dice grid; when grouped=true, sort combo dice to the front with a divider.
+// Pass roll to show inline combo labels after each value group.
+function renderDiceGrid(dice, grouped = false, roll = null) {
   const displayDice = [...dice];
   const freqMap = new Map();
 
@@ -761,6 +837,14 @@ function renderDiceGrid(dice, grouped = false) {
       if (fb !== fa) return fb - fa;
       return b.value - a.value;
     });
+  }
+
+  // Last index of each value in the sorted display order (for combo labels).
+  const valueLastIdx = new Map();
+  if (grouped && roll) {
+    for (let i = 0; i < displayDice.length; i++) {
+      if ((freqMap.get(displayDice[i].value) || 0) >= 2) valueLastIdx.set(displayDice[i].value, i);
+    }
   }
 
   const n = displayDice.length;
@@ -780,7 +864,13 @@ function renderDiceGrid(dice, grouped = false) {
         dividerDone = true;
       }
     }
-    html += dieEl(d, size, matched);
+    html += dieEl(d, size, matched, false, false, true);
+
+    // Combo label after last die in each value group.
+    if (roll && valueLastIdx.get(d.value) === i) {
+      const text = getValueComboText(d.value, freqMap.get(d.value), roll);
+      if (text) html += `<div class="combo-reveal-label" style="animation:none">${text}</div>`;
+    }
   }
   if (n > limit) html += `<div class="overflow-note">… and ${(n - limit).toLocaleString()} more</div>`;
   return html;
@@ -868,16 +958,16 @@ function render() {
     h += renderIdleDice();
     h += `<div class="roll-hint">Rolling...</div>`;
   } else if (G.phase === 'revealing') {
-    h += `<div class="roll-hint">Scoring...</div>`;
+    // dice-inner filled by buildRevealDom() after render()
   } else if (G.phase === 'idle' && !G.lastRoll) {
     h += `<div style="width:100%;text-align:center;font-size:10px;color:#4a4a70;margin-bottom:6px;letter-spacing:1px">YOUR DICE (${G.diceTypes.length})</div>`;
     h += renderIdleDice();
     h += `<div class="roll-hint">tap to roll</div>`;
   } else if (canRoll && G.lastRoll) {
-    h += renderDiceGrid(G.lastRoll.dice, true);
+    h += renderDiceGrid(G.lastRoll.dice, true, G.lastRoll);
     h += `<div class="roll-hint">tap to roll again</div>`;
   } else if (r) {
-    h += renderDiceGrid(r.dice, true);
+    h += renderDiceGrid(r.dice, true, r);
   }
   h += `</div>`; // .dice-inner
   h += `</div>`; // .dice-area
@@ -895,9 +985,14 @@ function render() {
       }
     }
     let bd = `${r.addSum}`;
-    if (r.multProd > 1) bd += ` × ${r.multProd} (purple)`;
-    if (r.handMult > 1) bd += ` × ${r.handMult} (combo)`;
-    h += `<div class="score-break">${bd} = ${r.score.toLocaleString()}</div>`;
+    if (r.multProd > 1) bd += ` × <span class="c-purple">${r.multProd}</span>`;
+    if (r.handMult > 1) bd += ` × <span class="c-yellow">${r.handMult}</span>`;
+    bd += ` = ${r.score.toLocaleString()}`;
+    let bdLabel = '';
+    if (r.multProd > 1) bdLabel += `<span class="c-purple">purple ×</span>`;
+    if (r.handMult > 1) bdLabel += (bdLabel ? ' · ' : '') + `<span class="c-yellow">combo ×</span>`;
+    h += `<div class="score-break">${bd}</div>`;
+    if (bdLabel) h += `<div class="score-break" style="font-size:10px">${bdLabel}</div>`;
     if (r.spawnedTypes.length > 0) {
       const grouped = r.spawnedTypes.reduce((m, t) => (m[t] = (m[t]||0)+1, m), {});
       const label = Object.entries(grouped).map(([t,n]) => `+${n} ${DICE[t].name}`).join(', ');
