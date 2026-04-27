@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NoDice</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0c0c1a;
+  color: #e4d8c0;
+  font-family: 'Courier New', monospace;
+  height: 100dvh;
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── HUD ─────────────────────────────────────────────── */
+.hud {
+  display: flex;
+  justify-content: space-around;
+  padding: 10px 8px;
+  background: #151525;
+  border-bottom: 1px solid #2a2a40;
+  flex-shrink: 0;
+}
+.hud-cell { text-align: center; }
+.hud-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #5a5a80; }
+.hud-val   { font-size: 19px; font-weight: bold; line-height: 1.2; }
+
+.c-yellow { color: #f5c542; }
+.c-green  { color: #4ade80; }
+.c-red    { color: #f87171; }
+.c-purple { color: #c084fc; }
+.c-blue   { color: #60a5fa; }
+.c-dim    { color: #5a5a80; }
+
+/* ── Blind bar ───────────────────────────────────────── */
+.blind-bar {
+  padding: 5px 12px;
+  background: #151525;
+  border-bottom: 1px solid #2a2a40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.blind-name { font-weight: bold; font-size: 13px; white-space: nowrap; }
+.prog-wrap  { flex: 1; height: 6px; background: #2a2a40; border-radius: 3px; overflow: hidden; }
+.prog-fill  { height: 100%; background: #4ade80; border-radius: 3px; transition: width .3s; }
+.dice-count { font-size: 11px; color: #5a5a80; white-space: nowrap; }
+
+/* ── Gems row ────────────────────────────────────────── */
+.gems-row {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  padding: 5px 10px;
+  background: #0c0c1a;
+  border-bottom: 1px solid #1a1a2e;
+  flex-shrink: 0;
+  min-height: 28px;
+  align-items: center;
+}
+.gem-chip {
+  background: #1e1e35; border: 1px solid #3a3a60;
+  border-radius: 5px; padding: 2px 7px; font-size: 10px;
+  cursor: default; position: relative;
+}
+.gem-chip:hover .gem-tip { display: block; }
+.gem-tip {
+  display: none; position: absolute; bottom: 100%; left: 0;
+  background: #2a2a45; border: 1px solid #4a4a70;
+  border-radius: 6px; padding: 5px 8px; font-size: 10px;
+  white-space: nowrap; z-index: 50; margin-bottom: 3px; color: #ccc;
+}
+
+/* ── Dice area ───────────────────────────────────────── */
+/*
+ * Two-layer pattern:
+ *   .dice-area  = scroll box — takes all remaining screen height via flex:1,
+ *                 never overflows its parent, scrolls internally.
+ *   .dice-inner = content wrapper — min-height:100% so it always fills the
+ *                 scroll box (centering dice when few) and grows beyond it
+ *                 when there are many dice (scroll kicks in automatically).
+ */
+.dice-area {
+  flex: 1;
+  min-height: 0;          /* allow flex child to shrink below content size */
+  overflow-y: auto;
+  overflow-x: hidden;
+  cursor: pointer;
+  -webkit-overflow-scrolling: touch;
+}
+.dice-area.is-rolling { cursor: wait; }
+
+.dice-inner {
+  min-height: 100%;       /* fills .dice-area when content is small */
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 12px;
+  justify-content: center;
+  align-content: center;
+  position: relative;
+}
+
+/* Pull-to-restart indicator */
+.ptr-bar {
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  color: #5a5a80;
+  padding: 6px 0 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s;
+}
+
+.die {
+  width: 52px; height: 52px; border-radius: 11px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: normal;
+  border: 2px solid rgba(255,255,255,.12);
+  animation: dieIn .25s ease-out both;
+  user-select: none; flex-shrink: 0;
+  position: relative;
+}
+.die.sm { width: 38px; height: 38px; font-size: 16px; border-radius: 8px; }
+.die.xs { width: 26px; height: 26px; font-size: 11px; border-radius: 6px; }
+.die.mini { width: 14px; height: 14px; border-radius: 4px; font-size: 0; border-width: 1px; }
+.die.nano { width:  9px; height:  9px; border-radius: 2px; font-size: 0; border-width: 1px; }
+.die.spawned { border-style: dashed; opacity: .82; }
+.die.matched { border-color: rgba(255,255,255,.55); box-shadow: 0 0 7px rgba(255,255,255,.18); }
+.die.cursed  { opacity: .3; border-color: #f87171; border-style: dashed; }
+/* Small badge for purple × indicator */
+.die-badge {
+  position: absolute; bottom: 2px; right: 3px;
+  font-size: 8px; line-height: 1; font-weight: normal;
+  opacity: .85; pointer-events: none;
+}
+.die.sm .die-badge { font-size: 7px; bottom: 1px; right: 2px; }
+.die.xs .die-badge, .die.mini .die-badge, .die.nano .die-badge { display: none; }
+/* Type count summary shown for large collections */
+.dice-type-summary {
+  width: 100%; text-align: center;
+  font-size: 11px; color: #5a5a80; padding: 2px 0 6px;
+}
+
+.die-normal { background: #222238; color: #e4d8c0; }
+.die-blue   { background: #0e1e38; color: #60a5fa; }
+.die-red    { background: #301010; color: #f87171; }
+.die-green  { background: #0e2810; color: #4ade80; }
+.die-purple { background: #1c0c2e; color: #c084fc; }
+.die-orange { background: #2a1200; color: #fb923c; }
+
+@keyframes dieIn {
+  from { opacity: 0; transform: scale(0.6); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes faceDrop {
+  0%   { transform: translateY(-3em); }
+  65%  { transform: translateY(0.2em); }
+  82%  { transform: translateY(-0.1em); }
+  100% { transform: translateY(0); }
+}
+
+.roll-hint {
+  width: 100%;
+  text-align: center; font-size: 12px; color: #4a4a70;
+  padding: 6px 0;
+  animation: breathe 2s infinite;
+}
+.overflow-note {
+  width: 100%; text-align: center;
+  font-size: 11px; color: #5a5a80; padding: 4px 0;
+}
+.die-sym { display: inline-block; }
+.die.die-landing .die-sym { animation: faceDrop 130ms ease-out both; }
+.die.is-rolling { animation: none; }
+.die.is-rolling .die-sym { animation: none; }
+.die.no-anim { animation: none; }
+@keyframes breathe { 0%,100%{opacity:.35} 50%{opacity:.9} }
+
+/* ── Score panel ─────────────────────────────────────── */
+.score-panel {
+  background: #151525; border-top: 1px solid #2a2a40;
+  padding: 8px 16px; flex-shrink: 0;
+  min-height: 62px;
+}
+.score-main  { font-size: 32px; font-weight: bold; color: #f5c542; text-align: center; }
+.score-combo { font-size: 12px; color: #c084fc; text-align: center; margin-top: 1px; }
+.score-break { font-size: 11px; color: #5a5a80; text-align: center; margin-top: 2px; }
+
+/* ── Action bar ──────────────────────────────────────── */
+.actions {
+  padding: 10px 16px;
+  display: flex; gap: 10px; justify-content: center; align-items: center;
+  flex-shrink: 0;
+  background: #0c0c1a;
+  border-top: 1px solid #1a1a2e;
+}
+.btn {
+  padding: 11px 22px; border-radius: 10px; border: none;
+  font-family: inherit; font-size: 14px; font-weight: bold;
+  text-transform: uppercase; letter-spacing: .8px;
+  cursor: pointer; transition: transform .1s;
+}
+.btn:active  { transform: scale(.96); }
+.btn:disabled{ opacity: .3; cursor: default; }
+.btn-roll  { background: #f5c542; color: #0c0c1a; }
+.btn-next  { background: #4ade80; color: #0c0c1a; }
+.btn-shop  { background: #c084fc; color: #0c0c1a; }
+
+/* ── Shop overlay ────────────────────────────────────── */
+.shop-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.86);
+  display: flex; align-items: flex-end; z-index: 100;
+}
+.shop-sheet {
+  background: #151525; width: 100%; max-width: 480px; margin: 0 auto;
+  border-radius: 18px 18px 0 0; padding: 18px 16px;
+  max-height: 88vh; overflow-y: auto;
+}
+.shop-title { font-size: 21px; color: #f5c542; font-weight: bold; text-align: center; }
+.shop-money { font-size: 13px; color: #4ade80; text-align: center; margin: 3px 0 14px; }
+.shop-section-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: #5a5a80; padding: 2px 2px 6px; margin-top: 8px;
+}
+.shop-section-label:first-of-type { margin-top: 0; }
+.shop-section-label.gem-label { color: #c084fc; }
+.shop-grid  { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.shop-card  {
+  background: #1e1e35; border: 1px solid #3a3a60;
+  border-radius: 10px; padding: 10px 12px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.shop-card.sold { opacity: .35; }
+.shop-iname { font-weight: bold; font-size: 13px; }
+.shop-idesc { font-size: 11px; color: #7a7090; margin-top: 2px; }
+.shop-right { display: flex; align-items: center; gap: 8px; margin-left: 10px; }
+.shop-price { font-size: 16px; color: #f5c542; font-weight: bold; white-space: nowrap; }
+.btn-buy {
+  background: #f5c542; color: #0c0c1a;
+  border: none; border-radius: 7px;
+  padding: 6px 11px; font-family: inherit;
+  font-size: 12px; font-weight: bold; cursor: pointer;
+  white-space: nowrap;
+}
+.btn-buy:disabled { background: #2a2a45; color: #5a5a80; cursor: default; }
+
+/* ── Game over ───────────────────────────────────────── */
+.gameover {
+  position: fixed; inset: 0; background: rgba(0,0,0,.93);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  z-index: 200; text-align: center; padding: 28px;
+}
+.gameover h1 { font-size: 50px; color: #f87171; margin-bottom: 6px; }
+.go-sub   { font-size: 14px; color: #7a7090; margin-bottom: 4px; }
+.go-score { font-size: 22px; color: #e4d8c0; margin-bottom: 14px; }
+.seed-box {
+  background: #1e1e35; border-radius: 10px;
+  padding: 10px 20px; margin: 0 0 18px;
+  font-size: 12px; color: #7a7090;
+}
+.seed-box b { color: #f5c542; font-size: 17px; display: block; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+'use strict';
+
+// ─── SEEDED PRNG (mulberry32) ──────────────────────────
+function makePRNG(seed) {
+  let s = seed >>> 0;
+  function next() {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  return {
+    next,
+    int:  n => Math.floor(next() * n),
+    bool: p => next() < p,
+    pick: a => a[Math.floor(next() * a.length)],
+    shuffle(a) {
+      const r = [...a];
+      for (let i = r.length - 1; i > 0; i--) {
+        const j = Math.floor(next() * (i + 1));
+        [r[i], r[j]] = [r[j], r[i]];
+      }
+      return r;
+    },
+  };
+}
+
+// ─── DICE DEFINITIONS ─────────────────────────────────
+const DICE = {
+  normal: { name: 'Normal', faces: [1,2,3,4,5,6],   isMult: false },
+  blue:   { name: 'Blue',   faces: [1,3,5,7,9,11],  isMult: false },
+  red:    { name: 'Red',    faces: [2,4,6,8,10,12], isMult: false },
+  green:  { name: 'Green',  faces: [1,1,1,3,3,3],   isMult: false },
+  purple: { name: 'Purple', faces: [1,2,3,4,5,6],   isMult: true  },
+  orange: { name: 'Orange', faces: [0,0,0,0,6,6],   isMult: false },
+};
+// Weighted shop pool — purple is rare, orange is uncommon
+const BUYABLE_DICE_POOL = [
+  { type: 'blue', w: 3 }, { type: 'red', w: 3 },
+  { type: 'green', w: 3 }, { type: 'orange', w: 2 }, { type: 'purple', w: 1 },
+];
+function pickShopDie(rng) {
+  const total = BUYABLE_DICE_POOL.reduce((s, d) => s + d.w, 0);
+  let r = rng.next() * total;
+  for (const d of BUYABLE_DICE_POOL) { r -= d.w; if (r <= 0) return d.type; }
+  return BUYABLE_DICE_POOL[0].type;
+}
+
+function rollDie(type, rng, spawned = false) {
+  const f = DICE[type].faces;
+  const fi = rng.int(f.length);
+  return { type, value: f[fi], faceIdx: fi, spawned };
+}
+
+// ─── GEM DEFINITIONS ──────────────────────────────────
+// phase: 'spawn' → returns new dice to add
+//        'modify' → mutates dice in place, returns nothing
+//        'score'  → mutates scoreInfo in place
+const GEMS = {
+  oneseed: {
+    name: 'Oneseed',
+    desc: 'Every 3 rolled 1s spawn a Normal die',
+    cost: 5, phase: 'spawn',
+    run: (dice, rng) => {
+      const n = Math.floor(dice.filter(d => !d.spawned && d.value === 1).length / 3);
+      return Array.from({length: n}, () => rollDie('normal', rng, true));
+    },
+  },
+  verdant: {
+    name: 'Verdant',
+    desc: 'Every 2 Green 3s spawn a Green die',
+    cost: 6, phase: 'spawn',
+    run: (dice, rng) => {
+      const n = Math.floor(dice.filter(d => !d.spawned && d.type === 'green' && d.value === 3).length / 2);
+      return Array.from({length: n}, () => rollDie('green', rng, true));
+    },
+  },
+  multiseed: {
+    name: 'Multiseed',
+    desc: 'Every 3 non-purple 6s spawn a Purple die',
+    cost: 8, phase: 'spawn',
+    run: (dice, rng) => {
+      const n = Math.floor(dice.filter(d => !d.spawned && d.value === 6 && d.type !== 'purple').length / 3);
+      return Array.from({length: n}, () => rollDie('purple', rng, true));
+    },
+  },
+  crimson: {
+    name: 'Crimson',
+    desc: 'Red dice each add +2 to their value',
+    cost: 5, phase: 'modify',
+    run: (dice) => dice.forEach(d => { if (d.type === 'red') d.value += 2; }),
+  },
+  azure: {
+    name: 'Azure',
+    desc: 'Blue dice each add +1 per additional Blue die',
+    cost: 6, phase: 'modify',
+    run: (dice) => {
+      const n = dice.filter(d => d.type === 'blue').length;
+      if (n > 1) dice.forEach(d => { if (d.type === 'blue') d.value += n - 1; });
+    },
+  },
+  cascade: {
+    name: 'Cascade',
+    desc: 'Any combo gives +1 to hand mult (stackable)',
+    cost: 7, phase: 'score',
+    run: (info) => { if (info.combo !== 'none') info.handMult++; },
+  },
+};
+
+// ─── SCORING ENGINE ────────────────────────────────────
+// Designed for high die counts: O(n) passes, no per-die DOM work.
+function scoreRoll(diceTypes, gemIds, rng, bossEffect) {
+  // 1. Roll
+  let dice = diceTypes.map(t => rollDie(t, rng, false));
+
+  // 2. Boss: min value = 2
+  if (bossEffect === 'min2') {
+    dice.forEach(d => { if (d.value < 2) d.value = 2; });
+  }
+
+  // 3. Spawn gems (spawned dice don't trigger further spawns within this roll)
+  const spawnedTypes = [];
+  for (const id of gemIds) {
+    const g = GEMS[id];
+    if (g && g.phase === 'spawn') {
+      const newDice = g.run(dice, rng);
+      dice = dice.concat(newDice);
+      spawnedTypes.push(...newDice.map(d => d.type));
+    }
+  }
+
+  // 4. Modify gems (run once on full dice list)
+  for (const id of gemIds) {
+    const g = GEMS[id];
+    if (g && g.phase === 'modify') g.run(dice);
+  }
+
+  // 5. Boss: curse one random die (mark it, exclude from all scoring)
+  if (bossEffect === 'onedead' && dice.length > 0) {
+    dice[rng.int(dice.length)].cursed = true;
+  }
+
+  // 6. Sum additive, product multiplicative (skip cursed)
+  let addSum = 0, multProd = 1;
+  for (const d of dice) {
+    if (d.cursed) continue;
+    if (DICE[d.type].isMult) multProd *= d.value;
+    else addSum += d.value;
+  }
+
+  // 7. Combination detection — multiple combos can stack (skip cursed)
+  const freq = new Map();
+  for (const d of dice) {
+    if (!d.cursed) freq.set(d.value, (freq.get(d.value) || 0) + 1);
+  }
+
+  let handMult = 1;
+  const comboLines = [];
+  let hasPair = false;
+  const fiveKinds = [];
+
+  for (const [val, cnt] of freq) {
+    if      (cnt >= 5) { fiveKinds.push(val); comboLines.push(`Five ${val}s`); }
+    else if (cnt >= 4) { handMult += 5;       comboLines.push(`Four ${val}s (+5)`); }
+    else if (cnt >= 3) { handMult += val;     comboLines.push(`Three ${val}s (+${val})`); }
+    else if (cnt >= 2) { hasPair = true; }
+  }
+  // Five-of-a-kind multiplies after all additive bonuses (skip value 0)
+  for (const val of fiveKinds) { if (val > 0) handMult *= val; }
+  // Pair is a fallback when no other combo exists
+  if (comboLines.length === 0 && hasPair) { handMult = 2; comboLines.push('Pair (×2)'); }
+
+  const combo = comboLines.length > 0 ? comboLines.join(' · ') : 'none';
+
+  // 8. Score gems
+  const info = { combo: comboLines.length > 0 ? combo : 'none', handMult };
+  for (const id of gemIds) {
+    const g = GEMS[id];
+    if (g && g.phase === 'score') g.run(info);
+  }
+
+  const score = Math.floor(addSum * multProd * info.handMult);
+  return { dice, addSum, multProd, combo: info.combo, comboLines, handMult: info.handMult, score, spawnedTypes };
+}
+
+// ─── ROUND CONFIG ──────────────────────────────────────
+const THRESHOLDS = [15, 30, 60, 110, 190, 320, 520, 840, 1360, 2200];
+function getThreshold(round) {
+  if (round <= THRESHOLDS.length) return THRESHOLDS[round - 1];
+  return Math.floor(THRESHOLDS.at(-1) * Math.pow(1.65, round - THRESHOLDS.length));
+}
+function isBoss(round) { return round % 3 === 0; }
+
+const BOSS_EFFECTS = [
+  { id: 'thresh',  label: 'Score threshold ×1.5' },
+  { id: 'onedead', label: 'One die is cursed each roll — it scores nothing' },
+  { id: 'min2',    label: 'All dice minimum face value is 2' },
+];
+function bossForRound(round) {
+  return BOSS_EFFECTS[Math.floor(round / 3 - 1) % BOSS_EFFECTS.length];
+}
+function effectiveThreshold(round) {
+  let t = getThreshold(round);
+  if (isBoss(round) && bossForRound(round).id === 'thresh') t = Math.floor(t * 1.5);
+  return t;
+}
+
+// ─── SHOP GENERATION ──────────────────────────────────
+function genShop(rng, wasBoss) {
+  const dieType = pickShopDie(rng);
+  const items = [{
+    kind: 'die', section: 'dice', id: dieType,
+    name: DICE[dieType].name + ' Die',
+    desc: 'Faces: ' + [...new Set(DICE[dieType].faces)].join(', ') +
+          (DICE[dieType].isMult ? ' (multiplier)' : ''),
+    cost: 4,
+  }];
+  if (wasBoss) {
+    const gemId = rng.pick(Object.keys(GEMS));
+    items.push({
+      kind: 'gem', section: 'gems', id: gemId,
+      name: GEMS[gemId].name,
+      desc: GEMS[gemId].desc,
+      cost: GEMS[gemId].cost,
+    });
+  }
+  return items;
+}
+
+// ─── GAME STATE ────────────────────────────────────────
+let G;
+let _animTimer = null;
+let _revealTimer = null;
+
+function newGame() {
+  const seed = (Math.floor(Math.random() * 0xFFFFFF) + 1) >>> 0;
+  G = {
+    seed,
+    rng: makePRNG(seed),
+    round: 1,
+    handsLeft: 5,
+    totalScore: 0,
+    money: 5,
+    diceTypes: ['normal', 'normal', 'normal'],
+    gemIds: [],
+    phase: 'idle',  // idle | rolling | revealing | scored | roundWon | shop | gameover
+    lastRoll: null,
+    shopItems: null,
+    reveal: null,
+    suppressDieAnim: false,
+  };
+  render();
+}
+
+// ─── ACTIONS ───────────────────────────────────────────
+function animateRollingDice() {
+  const el = document.querySelector('.dice-inner');
+  if (!el) return;
+  const all = G.diceTypes;
+  const n = all.length;
+  const size = dieSize(n);
+  const cap = Math.min(n, 300);
+  let html = n > 50 ? typeSummaryHtml(all) : '';
+  for (let i = 0; i < cap; i++) {
+    const t = all[i];
+    const fi = Math.floor(Math.random() * 6);
+    const cls = ['die', `die-${t}`, 'is-rolling', size].filter(Boolean).join(' ');
+    const badge = DICE[t].isMult ? '<span class="die-badge">×</span>' : '';
+    html += `<div class="${cls}"><span class="die-sym">${NORMAL_FACES[fi]}</span>${badge}</div>`;
+  }
+  if (n > cap) html += `<div class="overflow-note">… and ${(n - cap).toLocaleString()} more rolling</div>`;
+  html += `<div class="roll-hint">Rolling...</div>`;
+  el.innerHTML = html;
+}
+
+function doRoll() {
+  if (G.phase !== 'idle' && G.phase !== 'scored') return;
+  if (G.handsLeft <= 0) return;
+  G.phase = 'rolling';
+  render();
+  animateRollingDice();
+  _animTimer = setInterval(animateRollingDice, 80);
+  setTimeout(() => {
+    clearInterval(_animTimer);
+    _animTimer = null;
+    const boss = isBoss(G.round) ? bossForRound(G.round).id : null;
+    const roll = scoreRoll(G.diceTypes, G.gemIds, G.rng, boss);
+    startReveal(roll);
+  }, 550);
+}
+
+function startReveal(roll) {
+  const dice = [...roll.dice];
+  const freqMap = new Map();
+  for (const d of dice) freqMap.set(d.value, (freqMap.get(d.value) || 0) + 1);
+  dice.sort((a, b) => {
+    const fa = freqMap.get(a.value), fb = freqMap.get(b.value);
+    if (fb !== fa) return fb - fa;
+    return b.value - a.value;
+  });
+
+  const n = dice.length;
+  const STEP_MS = 160;
+  const totalMs = Math.min(2000, Math.max(500, n * 60));
+  const steps = Math.max(1, Math.round(totalMs / STEP_MS));
+  const batchSize = Math.max(1, Math.ceil(n / steps));
+
+  G.phase = 'revealing';
+  G.reveal = { dice, freqMap, revealedCount: 0, prevRevealedCount: 0, batchSize, roll };
+  render();
+  updateRevealFrame();
+
+  _revealTimer = setInterval(() => {
+    G.reveal.revealedCount = Math.min(n, G.reveal.revealedCount + batchSize);
+    updateRevealFrame();
+    if (G.reveal.revealedCount >= n) {
+      clearInterval(_revealTimer);
+      _revealTimer = null;
+      setTimeout(finishReveal, 300);
+    }
+  }, STEP_MS);
+}
+
+function updateRevealFrame() {
+  const rv = G.reveal;
+  const { dice, freqMap, revealedCount } = rv;
+  const n = dice.length;
+  const size = dieSize(n);
+
+  const inner = document.querySelector('.dice-inner');
+  if (!inner) return;
+
+  const cap = n > 1000 ? 2000 : 500;
+  const revealCap = Math.min(revealedCount, cap);
+  const rollingCap = Math.min(n - revealedCount, cap - revealCap);
+
+  let html = n > 50 ? typeSummaryHtml(dice) : '';
+  let dividerDone = false;
+
+  const { prevRevealedCount } = rv;
+
+  for (let i = 0; i < revealCap; i++) {
+    const d = dice[i];
+    const matched = (freqMap.get(d.value) || 0) >= 2;
+    if (!dividerDone && i > 0) {
+      const prevMatched = (freqMap.get(dice[i - 1].value) || 0) >= 2;
+      if (prevMatched && !matched) {
+        html += `<div style="width:100%;height:1px;background:#2a2a40;margin:3px 0"></div>`;
+        dividerDone = true;
+      }
+    }
+    const alreadyRevealed = i < prevRevealedCount;
+    html += dieEl(d, size, matched, alreadyRevealed, !alreadyRevealed);
+  }
+
+  for (let i = 0; i < rollingCap; i++) {
+    const d = dice[revealedCount + i];
+    const fi = Math.floor(Math.random() * 6);
+    const cls = ['die', `die-${d.type}`, 'is-rolling', size].filter(Boolean).join(' ');
+    const badge = DICE[d.type].isMult ? '<span class="die-badge">×</span>' : '';
+    html += `<div class="${cls}"><span class="die-sym">${NORMAL_FACES[fi]}</span>${badge}</div>`;
+  }
+
+  if (n > cap) html += `<div class="overflow-note">… and ${(n - cap).toLocaleString()} more</div>`;
+  inner.innerHTML = html;
+  rv.prevRevealedCount = revealedCount;
+
+  const scoreEl = document.querySelector('.score-reveal');
+  if (scoreEl) {
+    const displayScore = Math.round(rv.roll.score * revealedCount / n);
+    scoreEl.textContent = displayScore.toLocaleString();
+    scoreEl.style.fontSize = scoreSize(Math.max(1, displayScore));
+  }
+}
+
+function finishReveal() {
+  const roll = G.reveal.roll;
+  G.lastRoll = roll;
+  G.totalScore += roll.score;
+  G.handsLeft--;
+  if (roll.spawnedTypes.length > 0) G.diceTypes.push(...roll.spawnedTypes);
+  const thresh = effectiveThreshold(G.round);
+  if (G.totalScore >= thresh)  G.phase = 'roundWon';
+  else if (G.handsLeft === 0)  G.phase = 'gameover';
+  else                         G.phase = 'scored';
+  G.reveal = null;
+  G.suppressDieAnim = true;
+  render();
+  G.suppressDieAnim = false;
+}
+
+function enterShop() {
+  const wasBoss = isBoss(G.round);
+  G.money += G.handsLeft;
+  if (wasBoss) G.money += 3;
+  G.shopItems = genShop(G.rng, wasBoss);
+  G.phase = 'shop';
+  render();
+}
+
+function buyItem(idx) {
+  const item = G.shopItems[idx];
+  if (!item || item.bought || G.money < item.cost) return;
+  G.money -= item.cost;
+  item.bought = true;
+  if (item.kind === 'die') G.diceTypes.push(item.id);
+  else G.gemIds.push(item.id);
+  render();
+}
+
+function leaveShop() {
+  G.round++;
+  G.handsLeft = 5;
+  G.totalScore = 0;
+  G.lastRoll = null;
+  G.shopItems = null;
+  G.phase = 'idle';
+  render();
+}
+
+function onAreaClick() {
+  if (G.phase === 'idle' || G.phase === 'scored') doRoll();
+}
+
+// ─── RENDERING ─────────────────────────────────────────
+const NORMAL_FACES = ['⚀','⚁','⚂','⚃','⚄','⚅'];
+
+// All dice show ⚀–⚅ based on face index; only purple gets a × badge.
+function dieEl(d, size, matched = false, noAnim = false, landing = false) {
+  const cls = ['die', `die-${d.type}`, size,
+    d.spawned ? 'spawned'      : '',
+    matched   ? 'matched'      : '',
+    d.cursed  ? 'cursed'       : '',
+    (noAnim || G.suppressDieAnim) ? 'no-anim' : '',
+    landing   ? 'die-landing'  : '',
+  ].filter(Boolean).join(' ');
+  const sym   = NORMAL_FACES[(d.faceIdx ?? 0) % 6];
+  const badge = DICE[d.type].isMult ? '<span class="die-badge">×</span>' : '';
+  return `<div class="${cls}"><span class="die-sym">${sym}</span>${badge}</div>`;
+}
+
+function scoreSize(n) {
+  const len = n.toLocaleString().length;
+  if (len > 12) return '14px';
+  if (len > 9)  return '18px';
+  if (len > 6)  return '24px';
+  return '32px';
+}
+
+function hudNumSize(n) {
+  const len = n.toLocaleString().length;
+  return len > 7 ? '12px' : len > 5 ? '15px' : '19px';
+}
+
+// Pick die size class based on total count
+function dieSize(n) {
+  if (n > 1000) return 'nano';
+  if (n >  200) return 'mini';
+  if (n >   50) return 'xs';
+  if (n >   20) return 'sm';
+  return '';
+}
+
+// Type count summary string for large collections
+function typeSummaryHtml(source) {
+  const counts = {};
+  for (const item of source) {
+    const t = typeof item === 'string' ? item : item.type;
+    counts[t] = (counts[t] || 0) + 1;
+  }
+  const txt = Object.entries(counts).map(([t, c]) => `${c}× ${DICE[t].name}`).join('  ');
+  return `<div class="dice-type-summary">${txt}</div>`;
+}
+
+// Render dice grid; when grouped=true, sort combo dice to the front with a divider
+function renderDiceGrid(dice, grouped = false) {
+  const displayDice = [...dice];
+  const freqMap = new Map();
+
+  if (grouped) {
+    for (const d of dice) freqMap.set(d.value, (freqMap.get(d.value) || 0) + 1);
+    displayDice.sort((a, b) => {
+      const fa = freqMap.get(a.value), fb = freqMap.get(b.value);
+      if (fb !== fa) return fb - fa;
+      return b.value - a.value;
+    });
+  }
+
+  const n = displayDice.length;
+  const size = dieSize(n);
+  const limit = n > 1000 ? 2000 : 500;
+  let html = n > 50 ? typeSummaryHtml(displayDice) : '';
+  let dividerDone = false;
+
+  for (let i = 0; i < Math.min(n, limit); i++) {
+    const d = displayDice[i];
+    const matched = grouped && (freqMap.get(d.value) || 0) >= 2;
+
+    if (grouped && !dividerDone && i > 0) {
+      const prevMatched = (freqMap.get(displayDice[i - 1].value) || 0) >= 2;
+      if (prevMatched && !matched) {
+        html += `<div style="width:100%;height:1px;background:#2a2a40;margin:3px 0"></div>`;
+        dividerDone = true;
+      }
+    }
+    html += dieEl(d, size, matched);
+  }
+  if (n > limit) html += `<div class="overflow-note">… and ${(n - limit).toLocaleString()} more</div>`;
+  return html;
+}
+
+function renderIdleDice() {
+  const n = G.diceTypes.length;
+  const size = dieSize(n);
+  let html = n > 50 ? typeSummaryHtml(G.diceTypes) : '';
+  html += G.diceTypes.map(t => {
+    const fi = Math.floor(DICE[t].faces.length / 2);
+    return dieEl({ type: t, value: DICE[t].faces[fi], faceIdx: fi, spawned: false }, size);
+  }).join('');
+  return html;
+}
+
+function render() {
+  const thresh  = effectiveThreshold(G.round);
+  const boss    = isBoss(G.round);
+  const progress = Math.min(1, G.totalScore / thresh);
+  const r = G.lastRoll;
+
+  const blindNames = ['Small Blind', 'Big Blind', 'Boss Blind'];
+  const blindName  = boss ? 'Boss Blind' : blindNames[(G.round - 1) % 3];
+
+  let h = '';
+
+  // HUD
+  h += `<div class="hud">
+    <div class="hud-cell">
+      <div class="hud-label">Round</div>
+      <div class="hud-val ${boss ? 'c-red' : 'c-yellow'}">${G.round}</div>
+    </div>
+    <div class="hud-cell">
+      <div class="hud-label">Score</div>
+      <div class="hud-val c-yellow" style="font-size:${hudNumSize(G.totalScore)}">${G.totalScore.toLocaleString()}</div>
+    </div>
+    <div class="hud-cell">
+      <div class="hud-label">Need</div>
+      <div class="hud-val c-dim" style="font-size:${hudNumSize(thresh)}">${thresh.toLocaleString()}</div>
+    </div>
+    <div class="hud-cell">
+      <div class="hud-label">Hands</div>
+      <div class="hud-val ${G.handsLeft <= 1 ? 'c-red' : 'c-green'}">${G.handsLeft}</div>
+    </div>
+    <div class="hud-cell">
+      <div class="hud-label">Money</div>
+      <div class="hud-val c-green">$${G.money}</div>
+    </div>
+  </div>`;
+
+  // Blind bar
+  h += `<div class="blind-bar">
+    <span class="blind-name ${boss ? 'c-red' : ''}">${blindName}</span>
+    <div class="prog-wrap"><div class="prog-fill" style="width:${(progress*100).toFixed(1)}%"></div></div>
+    <span class="dice-count">${G.diceTypes.length}d</span>
+  </div>`;
+
+  // Boss condition banner
+  if (boss) {
+    const be = bossForRound(G.round);
+    h += `<div style="background:#2a1010;border-bottom:1px solid #5a2020;padding:4px 12px;
+                      font-size:11px;color:#f87171;flex-shrink:0">
+      ⚠ ${be.label}
+    </div>`;
+  }
+
+  // Gems row
+  h += `<div class="gems-row">`;
+  if (G.gemIds.length === 0) {
+    h += `<span class="c-dim" style="font-size:10px">No gems yet</span>`;
+  } else {
+    for (const id of G.gemIds) {
+      h += `<div class="gem-chip">${GEMS[id].name}<div class="gem-tip">${GEMS[id].desc}</div></div>`;
+    }
+  }
+  h += `</div>`;
+
+  // Dice area — outer = scroll container, inner = flex content (centers when few, scrolls when many)
+  const canRoll = G.phase === 'idle' || G.phase === 'scored';
+  h += `<div class="dice-area${G.phase === 'rolling' ? ' is-rolling' : ''}" onclick="onAreaClick()">`;
+  h += `<div id="ptr" class="ptr-bar"> </div>`;
+  h += `<div class="dice-inner">`;
+  if (G.phase === 'rolling') {
+    h += renderIdleDice();
+    h += `<div class="roll-hint">Rolling...</div>`;
+  } else if (G.phase === 'revealing') {
+    h += `<div class="roll-hint">Scoring...</div>`;
+  } else if (G.phase === 'idle' && !G.lastRoll) {
+    h += `<div style="width:100%;text-align:center;font-size:10px;color:#4a4a70;margin-bottom:6px;letter-spacing:1px">YOUR DICE (${G.diceTypes.length})</div>`;
+    h += renderIdleDice();
+    h += `<div class="roll-hint">tap to roll</div>`;
+  } else if (canRoll && G.lastRoll) {
+    h += renderDiceGrid(G.lastRoll.dice, true);
+    h += `<div class="roll-hint">tap to roll again</div>`;
+  } else if (r) {
+    h += renderDiceGrid(r.dice, true);
+  }
+  h += `</div>`; // .dice-inner
+  h += `</div>`; // .dice-area
+
+  // Score panel
+  h += `<div class="score-panel">`;
+  if (G.phase === 'revealing') {
+    h += `<div class="score-reveal score-main c-dim" style="font-size:32px">0</div>`;
+    h += `<div class="score-break">Scoring…</div>`;
+  } else if (r) {
+    h += `<div class="score-main" style="font-size:${scoreSize(r.score)}">${r.score.toLocaleString()}</div>`;
+    if (r.comboLines && r.comboLines.length > 0) {
+      for (const line of r.comboLines) {
+        h += `<div class="score-combo">${line}</div>`;
+      }
+    }
+    let bd = `${r.addSum}`;
+    if (r.multProd > 1) bd += ` × ${r.multProd} (purple)`;
+    if (r.handMult > 1) bd += ` × ${r.handMult} (combo)`;
+    h += `<div class="score-break">${bd} = ${r.score.toLocaleString()}</div>`;
+    if (r.spawnedTypes.length > 0) {
+      const grouped = r.spawnedTypes.reduce((m, t) => (m[t] = (m[t]||0)+1, m), {});
+      const label = Object.entries(grouped).map(([t,n]) => `+${n} ${DICE[t].name}`).join(', ');
+      h += `<div class="score-break" style="color:#4ade80">${label} added to collection</div>`;
+    }
+  } else {
+    h += `<div class="score-main c-dim">—</div>`;
+    h += `<div class="score-break">need ${thresh.toLocaleString()} over ${G.handsLeft} hands</div>`;
+  }
+  h += `</div>`;
+
+  // Actions
+  h += `<div class="actions">`;
+  if (G.phase === 'idle') {
+    h += `<button class="btn btn-roll" onclick="doRoll()">Roll ×${G.handsLeft}</button>`;
+  } else if (G.phase === 'scored') {
+    h += `<button class="btn btn-roll" onclick="doRoll()">Roll Again ×${G.handsLeft}</button>`;
+  } else if (G.phase === 'roundWon') {
+    h += `<div style="font-size:12px;color:#4ade80">+$${G.handsLeft} earned</div>`;
+    h += `<button class="btn btn-shop" onclick="enterShop()">Shop →</button>`;
+  }
+  h += `</div>`;
+
+  // Shop overlay
+  if (G.phase === 'shop') h += renderShop();
+
+  // Game over overlay
+  if (G.phase === 'gameover') {
+    h += `<div class="gameover">
+      <h1>GAME OVER</h1>
+      <div class="go-sub">Reached Round ${G.round}</div>
+      <div class="go-score">${G.totalScore.toLocaleString()} / ${thresh.toLocaleString()}</div>
+      <div class="seed-box">Seed<b>${G.seed}</b></div>
+      <button class="btn btn-roll" onclick="newGame()">Play Again</button>
+    </div>`;
+  }
+
+  document.getElementById('app').innerHTML = h;
+}
+
+function renderShopCard(it, idx) {
+  const ok = !it.bought && G.money >= it.cost;
+  return `<div class="shop-card${it.bought ? ' sold' : ''}">
+    <div>
+      <div class="shop-iname">${it.name}</div>
+      <div class="shop-idesc">${it.desc}</div>
+    </div>
+    <div class="shop-right">
+      <span class="shop-price">$${it.cost}</span>
+      <button class="btn-buy" onclick="buyItem(${idx})" ${ok ? '' : 'disabled'}>
+        ${it.bought ? 'Sold' : 'Buy'}
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderShop() {
+  const diceItems = G.shopItems.filter(i => i.section === 'dice');
+  const gemItems  = G.shopItems.filter(i => i.section === 'gems');
+
+  let h = `<div class="shop-overlay"><div class="shop-sheet">
+    <div class="shop-title">Shop</div>
+    <div class="shop-money">$${G.money} to spend</div>
+    <div class="shop-grid">
+      <div class="shop-section-label">Dice</div>`;
+
+  for (const it of diceItems) h += renderShopCard(it, G.shopItems.indexOf(it));
+
+  if (gemItems.length > 0) {
+    h += `<div class="shop-section-label gem-label">Gems — Boss Reward</div>`;
+    for (const it of gemItems) h += renderShopCard(it, G.shopItems.indexOf(it));
+  }
+
+  h += `</div>
+    <button class="btn btn-next" style="width:100%" onclick="leaveShop()">Continue →</button>
+  </div></div>`;
+  return h;
+}
+
+// ─── PULL TO RESTART ──────────────────────────────────
+// Touch listeners on document survive innerHTML re-renders.
+// Activates only when .dice-area is scrolled to the top.
+(function () {
+  const THRESHOLD = 72;
+  let startY = 0, dist = 0, live = false;
+
+  function ptr() { return document.getElementById('ptr'); }
+
+  document.addEventListener('touchstart', e => {
+    const area = document.querySelector('.dice-area');
+    live = !!(area && area.scrollTop <= 0);
+    if (live) startY = e.touches[0].clientY;
+    dist = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!live) return;
+    const area = document.querySelector('.dice-area');
+    if (!area || area.scrollTop > 0) { live = false; return; }
+    dist = Math.max(0, e.touches[0].clientY - startY);
+    const el = ptr();
+    if (el) {
+      el.style.opacity = Math.min(1, dist / THRESHOLD);
+      el.textContent = dist >= THRESHOLD ? '↑ release to restart' : '↓ pull to restart';
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (!live) return;
+    live = false;
+    if (dist >= THRESHOLD) {
+      newGame();
+    } else {
+      const el = ptr();
+      if (el) el.style.opacity = 0;
+    }
+    dist = 0;
+  }, { passive: true });
+})();
+
+newGame();
+</script>
+</body>
+</html>
